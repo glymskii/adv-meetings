@@ -29,8 +29,22 @@ final class APIClient {
     var tokenProvider: () -> String? = { Keychain.shared.token }
     var onUnauthorized: (() -> Void)?
 
-    init(session: URLSession = .shared) {
+    /// Сессия без cookie: аутентификация только по bearer-токену. Иначе URLSession сохраняет cookie сессии
+    /// Better Auth и с ними сервер требует заголовок Origin (403 «Missing or null Origin»).
+    static func makeSession() -> URLSession {
+        let cfg = URLSessionConfiguration.default
+        cfg.httpShouldSetCookies = false
+        cfg.httpCookieAcceptPolicy = .never
+        cfg.httpCookieStorage = nil
+        cfg.timeoutIntervalForRequest = 60
+        cfg.waitsForConnectivity = true
+        return URLSession(configuration: cfg)
+    }
+
+    init(session: URLSession = APIClient.makeSession()) {
         self.session = session
+        // Подчистить cookie, сохранённые прежними версиями
+        HTTPCookieStorage.shared.cookies?.forEach { HTTPCookieStorage.shared.deleteCookie($0) }
         decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { d in
             let c = try d.singleValueContainer()
@@ -150,7 +164,14 @@ extension APIClient {
     }
     func finalize(meetingId: String, body: FinalizeBody) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/finalize", body: body) }
     func retry(meetingId: String) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/retry", body: EmptyBody()) }
-    func renameSpeakers(meetingId: String, speakers: [String: String], selfSpeakerId: String?? = nil) async throws -> MeetingDetail { try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers, selfSpeakerId: selfSpeakerId)) }
+    func renameSpeakers(meetingId: String, speakers: [String: String], selfSpeakerId: String?? = nil, speakerRoles: [String: SpeakerRole]? = nil) async throws -> MeetingDetail {
+        try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers, selfSpeakerId: selfSpeakerId, speakerRoles: speakerRoles))
+    }
+    func users(query: String? = nil) async throws -> [AccountUser] {
+        var q: [URLQueryItem] = []
+        if let query, !query.isEmpty { q.append(URLQueryItem(name: "q", value: query)) }
+        return try await request("GET", "/api/users", query: q)
+    }
     func updateUserName(_ name: String) async throws { try await raw("POST", "/api/auth/update-user", body: UpdateUserBody(name: name)) }
     func regenerate(meetingId: String, body: RegenerateBody) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/reports", body: body) }
     func updateActionItems(meetingId: String, reportId: String, items: [ActionItem]) async throws -> Report {

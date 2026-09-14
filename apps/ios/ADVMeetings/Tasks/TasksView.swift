@@ -20,6 +20,30 @@ struct TasksView: View {
     var body: some View {
         NavigationStack(path: $path) {
             List {
+                Section {
+                    Picker("", selection: $filter) {
+                        ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowBackground(Color.clear)
+                    if assignee != nil || (overdueCount > 0 && filter != .done) {
+                        HStack(spacing: 8) {
+                            if let a = assignee {
+                                Button { assignee = nil; Task { await load() } } label: {
+                                    Label(a.name, systemImage: "xmark.circle.fill").font(.caption).padding(.horizontal, 10).padding(.vertical, 5).background(Color.accentColor.opacity(0.15), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            if overdueCount > 0 && filter != .done {
+                                Label("Просрочено: \(overdueCount)", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)
+                            }
+                            Spacer()
+                        }
+                        .listRowInsets(EdgeInsets(top: 0, leading: 4, bottom: 4, trailing: 0))
+                        .listRowBackground(Color.clear)
+                    }
+                }
                 if let error { ErrorBanner(message: error).listRowInsets(EdgeInsets()).listRowBackground(Color.clear) }
                 if items.isEmpty && !loading {
                     ContentUnavailableView(
@@ -58,33 +82,11 @@ struct TasksView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle(navTitle)
+            .navigationBarTitleDisplayMode(.large)
             .navigationDestination(for: String.self) { id in MeetingDetailView(meetingId: id) }
             .searchable(text: $query, prompt: "Поиск по задачам")
             .onChange(of: query) { _, _ in Task { await load() } }
             .refreshable { await load() }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                VStack(spacing: 8) {
-                    Picker("", selection: $filter) {
-                        ForEach(Filter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    if assignee != nil || overdueCount > 0 {
-                        HStack(spacing: 8) {
-                            if let a = assignee {
-                                Button { assignee = nil; Task { await load() } } label: {
-                                    Label(a.name, systemImage: "xmark.circle.fill").font(.caption).padding(.horizontal, 10).padding(.vertical, 5).background(Color.accentColor.opacity(0.15), in: Capsule())
-                                }
-                            }
-                            if overdueCount > 0 && filter != .done {
-                                Label("Просрочено: \(overdueCount)", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red)
-                            }
-                            Spacer()
-                        }
-                    }
-                }
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .background(.bar)
-            }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {

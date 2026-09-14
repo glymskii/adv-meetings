@@ -8,6 +8,7 @@ struct PeoplePickerView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var people: [Person] = []
+    @State private var users: [AccountUser] = []
     @State private var query = ""
     @State private var showAdd = false
     @State private var error: String?
@@ -47,6 +48,22 @@ struct PeoplePickerView: View {
             } footer: {
                 Text("Новые люди сохраняются в общую базу и доступны на всех устройствах.")
             }
+            if !filteredUsers.isEmpty {
+                Section {
+                    ForEach(filteredUsers) { u in
+                        Button { Task { await pickUser(u) } } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(u.displayName).foregroundStyle(.primary)
+                                Text([u.email, u.agencyName].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Коллеги · аккаунты холдинга")
+                } footer: {
+                    Text("Выбор коллеги добавит его в справочник ответственных.")
+                }
+            }
             if let error { Section { ErrorBanner(message: error) } }
         }
         .navigationTitle("Ответственный")
@@ -68,8 +85,33 @@ struct PeoplePickerView: View {
         return people.filter { $0.name.lowercased().contains(q) || $0.subtitle.lowercased().contains(q) }
     }
 
+    /// Аккаунты, которых ещё нет в справочнике (по имени или почте)
+    private var filteredUsers: [AccountUser] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        let knownNames = Set(people.map { $0.name.lowercased() })
+        let knownEmails = Set(people.compactMap { $0.email?.lowercased() })
+        return users.filter { u in
+            let name = u.name.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty, !knownNames.contains(name.lowercased()), !knownEmails.contains(u.email.lowercased()) else { return false }
+            return q.isEmpty || name.lowercased().contains(q) || u.email.lowercased().contains(q)
+        }
+    }
+
+    private func pickUser(_ u: AccountUser) async {
+        do {
+            let p = try await APIClient.shared.createPerson(PersonBody(name: u.name.trimmingCharacters(in: .whitespaces), role: nil, company: u.agencyName, email: u.email, isActive: nil))
+            onSelect(p); dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+
     private func load() async {
-        do { people = try await APIClient.shared.people(); error = nil } catch { self.error = error.localizedDescription }
+        do {
+            async let p = APIClient.shared.people()
+            async let u = APIClient.shared.users()
+            people = try await p
+            users = (try? await u) ?? []
+            error = nil
+        } catch { self.error = error.localizedDescription }
     }
 }
 

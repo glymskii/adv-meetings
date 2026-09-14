@@ -10,8 +10,7 @@ struct TranscriptView: View {
 
     @Environment(AuthService.self) private var auth
     @State private var selectedSpeaker: String?
-    @State private var renaming: String?
-    @State private var newName = ""
+    @State private var picking: String?
     @State private var askMyName = false
     @State private var myName = ""
     @State private var pendingSelf: String?
@@ -31,7 +30,7 @@ struct TranscriptView: View {
                         chip(title: "\(transcript.label(for: id)) · \(transcript.segments.filter { $0.speakerId == id }.count)", id: id, isSelf: transcript.selfSpeakerId == id)
                             .contextMenu {
                                 if canEdit {
-                                    Button { renaming = id; newName = transcript.speakers[id] ?? "" } label: { Label("Переименовать", systemImage: "pencil") }
+                                    Button { picking = id } label: { Label("Кто это? (имя, коллега, клиент)", systemImage: "person.text.rectangle") }
                                     Button { Task { await markSelf(id) } } label: { Label(transcript.selfSpeakerId == id ? "Это не я" : "Это я", systemImage: "person.crop.circle.badge.checkmark") }
                                 }
                             }
@@ -54,7 +53,7 @@ struct TranscriptView: View {
                         }
                         .contextMenu {
                             if canEdit {
-                                Button { renaming = s.speakerId; newName = transcript.speakers[s.speakerId] ?? "" } label: { Label("Переименовать спикера", systemImage: "pencil") }
+                                Button { picking = s.speakerId } label: { Label("Кто это? (имя, коллега, клиент)", systemImage: "person.text.rectangle") }
                                 Button { Task { await markSelf(s.speakerId) } } label: { Label(transcript.selfSpeakerId == s.speakerId ? "Это не я" : "Это я", systemImage: "person.crop.circle.badge.checkmark") }
                                 Button { selectedSpeaker = s.speakerId } label: { Label("Только этот спикер", systemImage: "line.3.horizontal.decrease") }
                             }
@@ -65,7 +64,7 @@ struct TranscriptView: View {
                     HStack {
                         Text("\(transcript.speakerIds.count) говорящих · \(transcript.wordCount) слов")
                         Spacer()
-                        if canEdit { Text("Долгое нажатие на спикера — переименовать / «Это я»").font(.caption2) }
+                        if canEdit { Text("Нажмите на спикера: имя, коллега, клиент, «Это я»").font(.caption2) }
                     }
                 } footer: {
                     if let error { Text(error).foregroundStyle(.red) }
@@ -73,18 +72,10 @@ struct TranscriptView: View {
             }
             .listStyle(.plain)
         }
-        .alert("Имя спикера", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Имя", text: $newName)
-            Button("Сохранить") {
-                guard let id = renaming else { return }
-                var map = transcript.speakers
-                map[id] = newName
-                Task { await apply(map, selfSpeakerId: nil) }
-                renaming = nil
+        .sheet(item: Binding(get: { picking.map { PickTarget(id: $0) } }, set: { picking = $0?.id })) { target in
+            SpeakerPickerView(speakerId: target.id, transcript: transcript) { name, role, isSelf in
+                await applyPick(id: target.id, name: name, role: role, isSelf: isSelf)
             }
-            Button("Отмена", role: .cancel) { renaming = nil }
-        } message: {
-            Text("Имя попадёт в отчёт после пересборки (меню ⋯ → Пересобрать).")
         }
         .alert("Как вас зовут?", isPresented: $askMyName) {
             TextField("Имя и фамилия", text: $myName)
@@ -98,7 +89,7 @@ struct TranscriptView: View {
     private func chip(title: String, id: String?, isSelf: Bool) -> some View {
         let selected = selectedSpeaker == id
         return Button {
-            withAnimation(.snappy) { selectedSpeaker = id }
+            if selected, let id, canEdit { picking = id } else { withAnimation(.snappy) { selectedSpeaker = id } }
         } label: {
             HStack(spacing: 4) {
                 if isSelf { Image(systemName: "person.crop.circle.badge.checkmark").font(.caption2) }
@@ -111,8 +102,21 @@ struct TranscriptView: View {
         .buttonStyle(.plain)
     }
 
-    private func markSelf(_ id: String) async {
-        if transcript.selfSpeakerId == id {
+    private struct PickTarget: Identifiable { let id: String }
+
+    /// Применить выбор из SpeakerPickerView
+    private func applyPick(id: String, name: String?, role: SpeakerRole?, isSelf: Bool) async {
+        if isSelf { await markSelf(id, force: true); return }
+        var map = transcript.speakers
+        if let name { map[id] = name.trimmingCharacters(in: .whitespaces) }
+        var roles = transcript.speakerRoles
+        if let role { roles[id] = role } else { roles.removeValue(forKey: id) }
+        let selfId: String?? = transcript.selfSpeakerId == id ? .some(nil) : nil
+        await apply(map, selfSpeakerId: selfId, roles: roles)
+    }
+
+    private func markSelf(_ id: String, force: Bool = false) async {
+        if transcript.selfSpeakerId == id && !force {
             await apply(transcript.speakers, selfSpeakerId: .some(nil))
             return
         }
@@ -141,9 +145,9 @@ struct TranscriptView: View {
         pendingSelf = nil
     }
 
-    private func apply(_ map: [String: String], selfSpeakerId: String??) async {
+    private func apply(_ map: [String: String], selfSpeakerId: String??, roles: [String: SpeakerRole]? = nil) async {
         do {
-            _ = try await APIClient.shared.renameSpeakers(meetingId: meetingId, speakers: map, selfSpeakerId: selfSpeakerId)
+            _ = try await APIClient.shared.renameSpeakers(meetingId: meetingId, speakers: map, selfSpeakerId: selfSpeakerId, speakerRoles: roles)
             error = nil
             await onChanged()
         } catch { self.error = error.localizedDescription }

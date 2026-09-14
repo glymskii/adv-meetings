@@ -188,17 +188,43 @@ struct Transcript: Codable, Hashable {
     let segments: [TranscriptSegment]
     let speakers: [String: String]
     let selfSpeakerId: String?
+    let speakerRoles: [String: SpeakerRole]
     let speakerIds: [String]
     let audioDurationSec: Double?
     let wordCount: Int
     let createdAt: Date
 
+    /// Подпись спикера: имя → «Клиент N» / «Вендор N» (нумерация внутри роли по порядку speaker_id) → «Спикер N»
     func label(for speakerId: String) -> String {
         if let custom = speakers[speakerId], !custom.trimmingCharacters(in: .whitespaces).isEmpty { return custom }
-        let digits = speakerId.filter(\.isNumber)
-        if let n = Int(digits) { return "Спикер \(n + 1)" }
-        return speakerId
+        if let role = speakerRoles[speakerId], role != .ours {
+            let sameRole = speakerRoles.filter { $0.value == role }.map(\.key).sorted { Self.index($0) < Self.index($1) }
+            let n = (sameRole.firstIndex(of: speakerId) ?? 0) + 1
+            return "\(role.title) \(n)"
+        }
+        return "Спикер \(Self.index(speakerId) + 1)"
     }
+
+    static func index(_ speakerId: String) -> Int { Int(speakerId.filter(\.isNumber)) ?? 0 }
+}
+
+enum SpeakerRole: String, Codable, CaseIterable {
+    case ours, client, vendor
+    var title: String {
+        switch self { case .ours: return "Коллега"; case .client: return "Клиент"; case .vendor: return "Вендор" }
+    }
+    var icon: String {
+        switch self { case .ours: return "person.crop.circle"; case .client: return "person.crop.circle.badge.questionmark"; case .vendor: return "shippingbox" }
+    }
+}
+
+struct AccountUser: Codable, Hashable, Identifiable {
+    let id: String
+    let name: String
+    let email: String
+    let agencyId: String?
+    let agencyName: String?
+    var displayName: String { name.trimmingCharacters(in: .whitespaces).isEmpty ? email : name }
 }
 
 struct ActionItem: Codable, Hashable, Identifiable {
@@ -481,12 +507,16 @@ struct FinalizeBody: Encodable {
     var markers: [Marker]?
 }
 
-struct SpeakersBody: Encodable { let speakers: [String: String]; var selfSpeakerId: String?? = nil
-    enum CodingKeys: String, CodingKey { case speakers, selfSpeakerId }
+struct SpeakersBody: Encodable {
+    let speakers: [String: String]
+    var selfSpeakerId: String?? = nil
+    var speakerRoles: [String: SpeakerRole]? = nil
+    enum CodingKeys: String, CodingKey { case speakers, selfSpeakerId, speakerRoles }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(speakers, forKey: .speakers)
         if let v = selfSpeakerId { try c.encode(v, forKey: .selfSpeakerId) }
+        if let r = speakerRoles { try c.encode(r, forKey: .speakerRoles) }
     }
 }
 struct UpdateUserBody: Encodable { let name: String }

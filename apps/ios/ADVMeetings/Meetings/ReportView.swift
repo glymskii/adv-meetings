@@ -269,7 +269,10 @@ struct SharesSheet: View {
         NavigationStack {
             Form {
                 Section("Добавить коллегу") {
-                    TextField("Корпоративная почта", text: $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    NavigationLink {
+                        UserPickerView(exclude: Set(shares.map(\.recipientEmail))) { u in email = u.email; Task { await add() } }
+                    } label: { Label("Выбрать из аккаунтов холдинга", systemImage: "person.2.badge.plus") }
+                    TextField("Или почта вручную", text: $email).keyboardType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Toggle("Вместе с транскриптом", isOn: $withTranscript)
                     Button("Поделиться") { Task { await add() } }.disabled(!email.contains("@"))
                 }
@@ -292,5 +295,42 @@ struct SharesSheet: View {
     private func load() async { shares = (try? await APIClient.shared.shares(meetingId: meetingId)) ?? [] }
     private func add() async {
         do { _ = try await APIClient.shared.share(meetingId: meetingId, email: email, scope: withTranscript ? "report_transcript" : "report"); email = ""; await load() } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+/// Выбор коллеги из аккаунтов холдинга (имя, фамилия, почта, агентство)
+@MainActor
+struct UserPickerView: View {
+    var exclude: Set<String> = []
+    let onSelect: (AccountUser) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @Environment(AuthService.self) private var auth
+    @State private var users: [AccountUser] = []
+    @State private var query = ""
+
+    var body: some View {
+        List {
+            ForEach(filtered) { u in
+                Button { onSelect(u); dismiss() } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(u.displayName).foregroundStyle(.primary)
+                        Text([u.email, u.agencyName].compactMap { $0 }.joined(separator: " · ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if filtered.isEmpty { Text("Никого не найдено").foregroundStyle(.secondary) }
+        }
+        .navigationTitle("Коллеги")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(text: $query, prompt: "Имя или почта")
+        .task { users = (try? await APIClient.shared.users()) ?? [] }
+    }
+
+    private var filtered: [AccountUser] {
+        let q = query.trimmingCharacters(in: .whitespaces).lowercased()
+        return users.filter { u in
+            u.id != auth.me?.id && !exclude.contains(u.email) && (q.isEmpty || u.name.lowercased().contains(q) || u.email.lowercased().contains(q))
+        }
     }
 }
