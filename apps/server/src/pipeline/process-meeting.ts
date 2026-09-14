@@ -131,6 +131,10 @@ async function transcribeStep(meeting: Meeting, mergedKey: string) {
     throw e;
   }
 
+  if (result.wordCount < 5) {
+    throw new PipelineError("В записи не распознана речь (тишина или слишком тихий звук). Проверьте микрофон и запишите заново.", false);
+  }
+
   const [row] = await d
     .insert(transcripts)
     .values({
