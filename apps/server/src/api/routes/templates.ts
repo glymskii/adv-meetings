@@ -1,0 +1,55 @@
+import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
+import { asc, eq } from "drizzle-orm";
+import { db } from "../../db/client.js";
+import { meetingTemplates } from "../../db/schema/index.js";
+import { catalog } from "../../templates/catalog.js";
+import { requireUser, type AppEnv } from "../middleware/auth.js";
+import { TemplatesResponse } from "../schemas.js";
+
+export const templatesRoutes = new OpenAPIHono<AppEnv>();
+
+templatesRoutes.use("*", requireUser);
+
+templatesRoutes.openapi(
+  createRoute({
+    method: "get",
+    path: "/",
+    tags: ["templates"],
+    summary: "Активные шаблоны встреч (последняя версия каждого кода)",
+    responses: { 200: { description: "OK", content: { "application/json": { schema: TemplatesResponse } } } },
+  }),
+  async (c) => {
+    const rows = await db().select().from(meetingTemplates).where(eq(meetingTemplates.isActive, true)).orderBy(asc(meetingTemplates.sortOrder), asc(meetingTemplates.version));
+    const latest = new Map<string, (typeof rows)[number]>();
+    for (const r of rows) {
+      const cur = latest.get(r.code);
+      if (!cur || cur.version < r.version) latest.set(r.code, r);
+    }
+    const templates = [...latest.values()]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map((t) => ({
+        id: t.id,
+        code: t.code,
+        version: t.version,
+        group: t.group as "internal" | "client" | "vendor",
+        category: t.category,
+        title: t.title,
+        subtitle: t.subtitle,
+        goal: t.goal,
+        reportTitle: t.reportTitle,
+        emoji: t.emoji,
+        color: t.color,
+        confidentiality: t.confidentiality,
+        allowConfidentialityChoice: t.allowConfidentialityChoice,
+        slaHours: t.slaHours,
+        sendTo: t.sendTo,
+        commonFields: t.commonFields,
+        specificFields: t.specificFields,
+        reportSections: t.reportSections,
+        tips: t.tips,
+        isDraft: t.isDraft,
+        sortOrder: t.sortOrder,
+      }));
+    return c.json({ groups: catalog.groups, categories: catalog.categories, templates }, 200);
+  },
+);

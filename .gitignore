@@ -1,0 +1,33 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# env & secrets
+.env
+.env.*
+!.env.example
+*.p8
+*.pem
+
+# build
+dist/
+build/
+*.tsbuildinfo
+coverage/
+
+# local data
+infra/data/
+tmp/
+*.log
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Xcode
+apps/ios/**/xcuserdata/
+apps/ios/**/*.xcuserstate
+apps/ios/**/DerivedData/
+apps/ios/**/.build/

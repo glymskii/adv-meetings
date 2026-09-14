@@ -1,0 +1,51 @@
+{
+  "name": "@adv/server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ADV Meetings — API и воркер пайплайна (транскрибация + саммари)",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/api/index.ts",
+    "worker": "tsx watch --env-file-if-exists=.env src/worker/index.ts",
+    "start:api": "node dist/api/index.js",
+    "start:worker": "node dist/worker/index.js",
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
+    "db:seed": "tsx --env-file-if-exists=.env src/db/seed.ts",
+    "e2e:pipeline": "tsx --env-file-if-exists=.env scripts/e2e-pipeline.ts",
+    "dev:bucket": "tsx --env-file-if-exists=.env scripts/dev-bucket.ts"
+  },
+  "dependencies": {
+    "@adv/shared": "workspace:*",
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@aws-sdk/client-s3": "^3.1131.0",
+    "@aws-sdk/s3-request-presigner": "^3.1131.0",
+    "@better-auth/drizzle-adapter": "^1.7.4",
+    "@hono/node-server": "^2.1.1",
+    "@hono/zod-openapi": "^1.6.3",
+    "better-auth": "^1.7.4",
+    "docx": "^9.7.1",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.13.7",
+    "jose": "^6.2.12",
+    "pdfkit": "^0.20.2",
+    "pg": "^8.23.0",
+    "pg-boss": "^12.31.1",
+    "pino": "^10.3.1",
+    "resend": "^6.28.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.0",
+    "@types/pdfkit": "^0.17.6",
+    "@types/pg": "^8.23.1",
+    "drizzle-kit": "^0.31.10",
+    "pino-pretty": "^13.1.3",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.0"
+  }
+}
