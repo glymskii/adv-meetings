@@ -188,6 +188,9 @@ export const ReportSchema = z
   .openapi("Report");
 
 export const MeetingDetailSchema = MeetingSummarySchema.extend({
+  tasks: z.array(z.lazy(() => TaskSchema)),
+  reportDueAt: z.string(),
+  reportSlaHours: z.number().int(),
   contextFields: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.number(), z.null()])),
   participantsHint: z.array(ParticipantSchema),
   numSpeakersHint: z.number().int().nullable(),
@@ -248,3 +251,84 @@ export const MeSchema = z
 export const ActionItemsBody = z.object({ actionItems: z.array(ActionItemSchema) }).openapi("ActionItemsBody");
 
 export const StatusEventSchema = z.object({ status: MeetingStatus, statusDetail: z.string().nullable(), error: z.string().nullable(), updatedAt: z.string() }).openapi("StatusEvent");
+
+// ---------- Задачи / люди / настройки ----------
+
+export const PersonSchema = z
+  .object({
+    id: z.string().uuid(),
+    name: z.string(),
+    role: z.string().nullable(),
+    company: z.string().nullable(),
+    email: z.string().nullable(),
+    agencyId: z.string().nullable(),
+    source: z.string(),
+    isActive: z.boolean(),
+    openTasks: z.number().int().optional(),
+  })
+  .openapi("Person");
+
+export const PersonBody = z
+  .object({
+    name: z.string().trim().min(2).max(80),
+    role: z.string().trim().max(80).nullable().optional(),
+    company: z.string().trim().max(80).nullable().optional(),
+    email: z.string().email().nullable().optional(),
+  })
+  .openapi("PersonBody");
+
+export const TaskSchema = z
+  .object({
+    id: z.string().uuid(),
+    meetingId: z.string().uuid(),
+    meetingTitle: z.string(),
+    meetingEmoji: z.string(),
+    meetingStartedAt: z.string(),
+    task: z.string(),
+    assigneeName: z.string().nullable(),
+    assigneePersonId: z.string().uuid().nullable(),
+    deadlineText: z.string().nullable(),
+    deadlineDate: z.string().nullable(),
+    deadlineIsDefault: z.boolean(),
+    quote: z.string().nullable(),
+    status: z.enum(["open", "done"]),
+    doneAt: z.string().nullable(),
+    source: z.string(),
+    isOwner: z.boolean(),
+    createdAt: z.string(),
+  })
+  .openapi("Task");
+
+export const TaskPatchBody = z
+  .object({
+    task: z.string().trim().min(1).max(500).optional(),
+    status: z.enum(["open", "done"]).optional(),
+    assigneePersonId: z.string().uuid().nullable().optional(),
+    /** Имя для нового человека (создаст запись в справочнике) или свободный текст, если assigneePersonId = null */
+    assigneeName: z.string().trim().max(80).nullable().optional(),
+    deadlineDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+    deadlineText: z.string().trim().max(120).nullable().optional(),
+  })
+  .openapi("TaskPatchBody");
+
+export const TaskCreateBody = z
+  .object({
+    task: z.string().trim().min(1).max(500),
+    assigneePersonId: z.string().uuid().nullable().optional(),
+    assigneeName: z.string().trim().max(80).nullable().optional(),
+    deadlineDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
+  })
+  .openapi("TaskCreateBody");
+
+export const DeadlineSettingsSchema = z
+  .object({
+    defaultTaskDeadlineDays: z.number().int().min(0).max(90),
+    workingDaysOnly: z.boolean(),
+    remindDaysBefore: z.number().int().min(0).max(30),
+    remindHourLocal: z.number().int().min(0).max(23),
+    reportSlaInternalHours: z.number().int().min(1).max(720),
+    reportSlaExternalHours: z.number().int().min(1).max(720),
+  })
+  .openapi("DeadlineSettings");
+
+export const DeadlineSettingsPatch = DeadlineSettingsSchema.partial().openapi("DeadlineSettingsPatch");

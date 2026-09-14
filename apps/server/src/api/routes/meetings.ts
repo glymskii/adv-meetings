@@ -11,6 +11,8 @@ import { assembleSections, renderDocx, renderMarkdown, renderPdf } from "../../e
 import { config } from "../../config.js";
 import { logger } from "../../logger.js";
 import { loadMeetingWithAccess, requireOwner, type Access } from "../authz.js";
+import { currentTasks, getDeadlineSettings } from "../../tasks/service.js";
+import { taskDto } from "./tasks.js";
 import { requireUser, type AppEnv } from "../middleware/auth.js";
 import {
   ActionItemsBody,
@@ -191,7 +193,13 @@ async function detailDto(a: Access) {
   const reportTemplate = cur ? (cur.templateId === t.id ? t : await templateById(cur.templateId)) : t;
   const includeInternal = a.scope === "full";
   const showTranscript = a.scope === "full" || a.scope === "report_transcript";
+  const [taskRows, dl] = await Promise.all([currentTasks(m.id), getDeadlineSettings()]);
+  const slaHours = t.group === "internal" ? dl.reportSlaInternalHours : dl.reportSlaExternalHours;
+  const reportDueAt = new Date(m.startedAt.getTime() + slaHours * 3600 * 1000);
   return {
+    tasks: taskRows.map((x) => ({ ...taskDto(x, m, t.emoji, ""), isOwner: a.isOwner })),
+    reportDueAt: reportDueAt.toISOString(),
+    reportSlaHours: slaHours,
     ...summaryDto(m, t, { hasTranscript: !!tr, hasReport: !!cur, isOwner: a.isOwner }),
     contextFields: m.contextFields,
     participantsHint: m.participantsHint,

@@ -63,9 +63,35 @@ export interface ActionItem {
   assignee: string | null;
   task: string;
   deadline: string | null;
+  /** ISO-дата YYYY-MM-DD, если срок удалось определить */
+  deadlineDate?: string | null;
   quote?: string | null;
   done?: boolean;
 }
+
+export interface DeadlineSettings {
+  /** Срок по умолчанию для задач без дедлайна: дней после встречи (0 = не назначать) */
+  defaultTaskDeadlineDays?: number;
+  /** Считать только рабочие дни при назначении срока по умолчанию */
+  workingDaysOnly?: boolean;
+  /** За сколько дней до дедлайна напоминать владельцу встречи (0 = не напоминать) */
+  remindDaysBefore?: number;
+  /** Час напоминания по Алматы (0–23) */
+  remindHourLocal?: number;
+  /** SLA отправки отчёта: внутренние встречи, часов после встречи */
+  reportSlaInternalHours?: number;
+  /** SLA отправки отчёта: встречи с клиентом/вендором, часов после встречи */
+  reportSlaExternalHours?: number;
+}
+
+export const DEFAULT_DEADLINE_SETTINGS: Required<DeadlineSettings> = {
+  defaultTaskDeadlineDays: 7,
+  workingDaysOnly: true,
+  remindDaysBefore: 1,
+  remindHourLocal: 9,
+  reportSlaInternalHours: 24,
+  reportSlaExternalHours: 48,
+};
 
 export interface DecisionItem {
   decision: string;

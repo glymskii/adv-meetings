@@ -12,6 +12,10 @@ export const ActionItemOut = z.object({
   assignee: z.string().nullable().describe("Имя ответственного или null, если не назван"),
   task: z.string().describe("Конкретная задача"),
   deadline: z.string().nullable().describe("Дедлайн как прозвучал (дата или срок) или null"),
+  deadlineDate: z
+    .string()
+    .nullable()
+    .describe("Дедлайн как дата YYYY-MM-DD, вычисленная от даты встречи (например «к пятнице», «через две недели», «20 мая» → ближайшая такая дата не раньше встречи); null, если срок не определить"),
   quote: z.string().nullable().describe("Короткая дословная цитата из транскрипта, подтверждающая задачу, или null"),
 });
 

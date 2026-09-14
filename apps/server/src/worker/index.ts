@@ -4,7 +4,7 @@ import { closeDb } from "../db/client.js";
 import { getBoss, QUEUES, stopBoss, type NotifyJob, type ProcessMeetingJob } from "../queue/boss.js";
 import { markFailedFromDlq, processMeeting } from "../pipeline/process-meeting.js";
 import { sweepAudio, sweepStuck } from "../pipeline/sweeps.js";
-import { notifyMeeting } from "../push/apns.js";
+import { notifyMeeting, sendTaskReminders } from "../push/apns.js";
 
 process.env.SERVICE_NAME ??= "worker";
 
@@ -35,6 +35,11 @@ async function main() {
     await sweepStuck();
   });
 
+  await boss.work(QUEUES.taskReminders, { batchSize: 1, pollingIntervalSeconds: 30 }, async () => {
+    await sendTaskReminders();
+  });
+
+  await boss.schedule(QUEUES.taskReminders, "5 * * * *"); // каждый час; отправка только в remindHourLocal по Алматы
   await boss.schedule(QUEUES.audioSweep, "15 * * * *"); // каждый час
   await boss.schedule(QUEUES.stuckSweep, "*/10 * * * *"); // каждые 10 минут
 

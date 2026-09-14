@@ -21,6 +21,7 @@ function sttUploadMode(): "url" | "file" {
   return /^(localhost|127\.0\.0\.1|minio|.*\.local)$/.test(host) ? "file" : "url";
 }
 import { enqueueNotify } from "../queue/boss.js";
+import { syncReportActionItems, syncTasksFromReport } from "../tasks/service.js";
 
 type Meeting = typeof meetings.$inferSelect;
 type Template = typeof meetingTemplates.$inferSelect;
@@ -236,9 +237,10 @@ async function summarizeStep(meeting: Meeting, template: Template, opts: { effor
     includeInternal: true,
   });
 
+  let inserted: typeof reports.$inferSelect | undefined;
   await d.transaction(async (tx) => {
     await tx.update(reports).set({ isCurrent: false }).where(eq(reports.meetingId, meeting.id));
-    await tx.insert(reports).values({ ...base, markdown });
+    [inserted] = await tx.insert(reports).values({ ...base, markdown }).returning();
     await tx.insert(usageEvents).values({
       meetingId: meeting.id,
       userId: meeting.ownerId,
@@ -258,6 +260,10 @@ async function summarizeStep(meeting: Meeting, template: Template, opts: { effor
       .where(eq(meetings.id, meeting.id));
   });
   logger.info({ meetingId: meeting.id, version, model: res.model, costUsd: res.costUsd }, "Отчёт сохранён");
+  if (inserted) {
+    await syncTasksFromReport(meeting, inserted, base.actionItems);
+    await syncReportActionItems(meeting.id);
+  }
   return version;
 }
 

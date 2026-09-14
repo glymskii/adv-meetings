@@ -101,6 +101,8 @@ function formatMarkers(markers: Marker[]): string {
 
 export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string {
   const date = m.startedAt.toLocaleString("ru-RU", { timeZone: "Asia/Almaty", dateStyle: "long", timeStyle: "short" });
+  const isoDate = new Date(m.startedAt.getTime() + 5 * 3600 * 1000).toISOString().slice(0, 10);
+  const weekday = m.startedAt.toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty", weekday: "long" });
   const dur = m.durationSec ? `${Math.round(m.durationSec / 60)} мин` : tr.audioDurationSec ? `${Math.round(Number(tr.audioDurationSec) / 60)} мин` : "неизвестно";
   const speakers = tr.speakers ?? {};
   const speakerLines = Object.keys(speakers).length
@@ -110,7 +112,7 @@ export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string
   return [
     "ДАННЫЕ ВСТРЕЧИ:",
     `- Тип: ${t.title}`,
-    `- Дата и время: ${date} (Алматы)`,
+    `- Дата и время: ${date} (Алматы), ${weekday}; ISO-дата встречи: ${isoDate} — от неё считай относительные сроки («к пятнице», «через неделю», «20-го»)`,
     `- Длительность: ${dur}`,
     `- Платформа / место: ${m.platform ?? "не указано"}`,
     `- Язык записи: ${tr.languageCode ?? "авто"}`,

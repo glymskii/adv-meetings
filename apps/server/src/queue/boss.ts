@@ -8,6 +8,7 @@ export const QUEUES = {
   audioSweep: "audio.sweep",
   stuckSweep: "meetings.stuck",
   notify: "meeting.notify",
+  taskReminders: "tasks.remind",
 } as const;
 
 export interface ProcessMeetingJob {
@@ -44,6 +45,7 @@ export async function getBoss(): Promise<PgBoss> {
   await b.createQueue(QUEUES.notify, { retryLimit: 5, retryDelay: 15, retryBackoff: true, expireInSeconds: 60 });
   await b.createQueue(QUEUES.audioSweep, { retryLimit: 1, expireInSeconds: 60 * 10 });
   await b.createQueue(QUEUES.stuckSweep, { retryLimit: 1, expireInSeconds: 60 * 5 });
+  await b.createQueue(QUEUES.taskReminders, { retryLimit: 1, expireInSeconds: 60 * 5 });
   boss = b;
   return b;
 }

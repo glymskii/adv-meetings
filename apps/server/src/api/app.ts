@@ -9,6 +9,9 @@ import type { AppEnv } from "./middleware/auth.js";
 import { meetingsRoutes } from "./routes/meetings.js";
 import { meRoutes } from "./routes/me.js";
 import { templatesRoutes } from "./routes/templates.js";
+import { meetingTasksRoutes, tasksRoutes } from "./routes/tasks.js";
+import { peopleRoutes } from "./routes/people.js";
+import { settingsRoutes } from "./routes/settings.js";
 
 export function createApp() {
   const cfg = config();
@@ -36,7 +39,11 @@ export function createApp() {
   app.on(["GET", "POST"], "/api/auth/*", (c) => auth().handler(c.req.raw));
 
   app.route("/api/templates", templatesRoutes);
+  app.route("/api/meetings", meetingTasksRoutes);
   app.route("/api/meetings", meetingsRoutes);
+  app.route("/api/tasks", tasksRoutes);
+  app.route("/api/people", peopleRoutes);
+  app.route("/api/settings", settingsRoutes);
   app.route("/api/me", meRoutes);
 
   app.doc("/api/openapi.json", {

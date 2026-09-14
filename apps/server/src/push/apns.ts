@@ -1,10 +1,11 @@
 import { createSign } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
 import { db } from "../db/client.js";
-import { devices, meetings, reports } from "../db/schema/index.js";
+import { devices, meetings, reports, tasks } from "../db/schema/index.js";
+import { formatRuDate, getDeadlineSettings, tasksDueForReminder } from "../tasks/service.js";
 import type { NotifyJob } from "../queue/boss.js";
 
 /**
@@ -123,4 +124,35 @@ export async function notifyMeeting(job: NotifyJob): Promise<void> {
       return;
     }
   }
+}
+
+
+/** Ежедневные напоминания о дедлайнах задач владельцам встреч (одно уведомление на пользователя). */
+export async function sendTaskReminders(): Promise<number> {
+  const d = db();
+  const s = await getDeadlineSettings();
+  // Отправляем только в назначенный час по Алматы (cron дергает каждый час)
+  const hourAlmaty = (new Date().getUTCHours() + 5) % 24;
+  if (hourAlmaty !== s.remindHourLocal) return 0;
+  const due = (await tasksDueForReminder()).filter((t) => !t.remindedAt);
+  if (due.length === 0) return 0;
+  const byOwner = new Map<string, typeof due>();
+  for (const t of due) byOwner.set(t.ownerId, [...(byOwner.get(t.ownerId) ?? []), t]);
+  let sent = 0;
+  for (const [ownerId, list] of byOwner) {
+    const userDevices = await d.select().from(devices).where(eq(devices.userId, ownerId));
+    const first = list[0]!;
+    const body = list.length === 1
+      ? `${first.task}${first.assigneeName ? " — " + first.assigneeName : ""} · срок ${formatRuDate(first.deadlineDate!)}`
+      : `${list.length} задач со сроком ${formatRuDate(first.deadlineDate!)}: ${list.slice(0, 2).map((t) => t.task).join("; ")}…`;
+    for (const dev of userDevices) {
+      if (dev.platform !== "ios") continue;
+      const res = await sendApns(dev.pushToken, { title: s.remindDaysBefore === 0 ? "Дедлайн сегодня" : "Завтра дедлайн", body, data: { kind: "task_reminder", meetingId: first.meetingId }, threadId: "tasks" });
+      if (res === "invalid_token") await d.delete(devices).where(eq(devices.id, dev.id));
+      if (res === "ok") sent++;
+    }
+    await d.update(tasks).set({ remindedAt: new Date() }).where(inArray(tasks.id, list.map((t) => t.id)));
+  }
+  logger.info({ users: byOwner.size, tasks: due.length, sent }, "Напоминания о дедлайнах");
+  return sent;
 }

@@ -110,7 +110,7 @@ async function fakeSummarize(t: Template, m: Meeting, tr: Transcript, opts: Summ
       ? Object.entries(tr.speakers).map(([, name]) => ({ name, role: null, company: null, side: "unknown" as const }))
       : [{ name: "Спикер 1", role: null, company: null, side: "unknown" as const }],
     sections: textSections.map((s) => ({ key: s.key, content: `_(заглушка)_ Содержимое раздела «${s.heading}» по транскрипту.` })),
-    actionItems: [{ assignee: "Айгерим", task: "Подготовить медиаплан", deadline: "20 мая", quote: null }],
+    actionItems: [{ assignee: "Айгерим", task: "Подготовить медиаплан", deadline: "20 мая", deadlineDate: "2027-05-20", quote: null }, { assignee: "Данияр", task: "Креативная рамка", deadline: "к пятнадцатому", deadlineDate: null, quote: null }],
     decisions: [{ decision: "Запуск кампании в июне", owner: "Данияр", deadline: "1 июня" }],
     openQuestions: ["Tone of voice клиента", "Кто утверждает бриф на стороне клиента"],
     clientRequests: [],

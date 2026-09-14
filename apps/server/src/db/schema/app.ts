@@ -16,6 +16,7 @@ import { user } from "./auth.js";
 import type {
   ActionItem,
   ContextFields,
+  DeadlineSettings,
   DecisionItem,
   Marker,
   NextMeeting,
@@ -269,3 +270,68 @@ export const usageEvents = pgTable(
   },
   (t) => [index("usage_events_agency_idx").on(t.agencyId, t.createdAt)],
 );
+
+/** Справочник ответственных (общий для холдинга): добавляется вручную или из action items отчётов. */
+export const people = pgTable(
+  "people",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    normalizedName: text("normalized_name").notNull(),
+    role: text("role"),
+    company: text("company"),
+    email: text("email"),
+    agencyId: text("agency_id").references(() => agencies.id),
+    source: text("source").notNull().default("manual"), // manual | ai
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    isActive: boolean("is_active").notNull().default(true),
+    ...timestamps,
+  },
+  (t) => [uniqueIndex("people_normalized_name_idx").on(t.normalizedName), index("people_active_idx").on(t.isActive)],
+);
+
+export const taskStatus = pgEnum("task_status", ["open", "done"]);
+
+/** Задачи (action items) по всем встречам — живое состояние; reports.action_items хранит извлечение модели. */
+export const tasks = pgTable(
+  "tasks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    meetingId: uuid("meeting_id")
+      .notNull()
+      .references(() => meetings.id, { onDelete: "cascade" }),
+    reportId: uuid("report_id").references(() => reports.id, { onDelete: "set null" }),
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    agencyId: text("agency_id"),
+    position: integer("position").notNull().default(0),
+    task: text("task").notNull(),
+    normalizedTask: text("normalized_task").notNull(),
+    assigneeName: text("assignee_name"),
+    assigneePersonId: uuid("assignee_person_id").references(() => people.id, { onDelete: "set null" }),
+    deadlineText: text("deadline_text"),
+    deadlineDate: text("deadline_date"), // YYYY-MM-DD
+    deadlineIsDefault: boolean("deadline_is_default").notNull().default(false),
+    quote: text("quote"),
+    status: taskStatus("status").notNull().default("open"),
+    doneAt: timestamp("done_at", { withTimezone: true }),
+    source: text("source").notNull().default("ai"), // ai | manual
+    isCurrent: boolean("is_current").notNull().default(true),
+    remindedAt: timestamp("reminded_at", { withTimezone: true }),
+    ...timestamps,
+  },
+  (t) => [
+    index("tasks_owner_status_idx").on(t.ownerId, t.status, t.deadlineDate),
+    index("tasks_meeting_idx").on(t.meetingId),
+    index("tasks_assignee_idx").on(t.assigneePersonId),
+  ],
+);
+
+/** Настройки холдинга (одна строка id='global'): сроки по умолчанию, SLA отчётов, напоминания. */
+export const settings = pgTable("settings", {
+  id: text("id").primaryKey(), // 'global'
+  deadlines: jsonb("deadlines").$type<DeadlineSettings>().notNull().default({}),
+  updatedBy: text("updated_by"),
+  ...timestamps,
+});
