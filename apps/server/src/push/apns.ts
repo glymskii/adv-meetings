@@ -53,12 +53,33 @@ export interface PushPayload {
   threadId?: string;
 }
 
+/** Токены, для которых уже известно рабочее окружение APNs (dev-сборки из Xcode → sandbox, TestFlight/App Store → production). */
+const tokenEnv = new Map<string, "production" | "sandbox">();
+
+/**
+ * Отправка push. Пробует основное окружение (APNS_PRODUCTION), при BadDeviceToken — другое:
+ * так одновременно работают dev-сборки (sandbox) и TestFlight (production).
+ */
 export async function sendApns(deviceToken: string, payload: PushPayload): Promise<"ok" | "invalid_token" | "error" | "disabled"> {
+  const cfg = config();
+  const primary: "production" | "sandbox" = tokenEnv.get(deviceToken) ?? (cfg.APNS_PRODUCTION ? "production" : "sandbox");
+  const first = await sendApnsTo(primary, deviceToken, payload);
+  if (first !== "invalid_token") {
+    if (first === "ok") tokenEnv.set(deviceToken, primary);
+    return first;
+  }
+  const other = primary === "production" ? "sandbox" : "production";
+  const second = await sendApnsTo(other, deviceToken, payload);
+  if (second === "ok") tokenEnv.set(deviceToken, other);
+  return second;
+}
+
+async function sendApnsTo(env: "production" | "sandbox", deviceToken: string, payload: PushPayload): Promise<"ok" | "invalid_token" | "error" | "disabled"> {
   const jwt = apnsJwt();
   if (!jwt) return "disabled";
   const cfg = config();
   const http2 = await import("node:http2");
-  const host = cfg.APNS_PRODUCTION ? "https://api.push.apple.com" : "https://api.sandbox.push.apple.com";
+  const host = env === "production" ? "https://api.push.apple.com" : "https://api.sandbox.push.apple.com";
   const client = http2.connect(host);
   try {
     return await new Promise((resolve) => {
@@ -79,7 +100,7 @@ export async function sendApns(deviceToken: string, payload: PushPayload): Promi
         if (status === 200) resolve("ok");
         else if (status === 410 || (status === 400 && /BadDeviceToken|DeviceTokenNotForTopic/.test(body))) resolve("invalid_token");
         else {
-          logger.warn({ status, body }, "APNs error");
+          logger.warn({ status, body, env }, "APNs error");
           resolve("error");
         }
       });
