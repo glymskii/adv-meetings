@@ -177,6 +177,9 @@ extension APIClient {
     func updateActionItems(meetingId: String, reportId: String, items: [ActionItem]) async throws -> Report {
         try await request("PATCH", "/api/meetings/\(meetingId)/reports/\(reportId)/action-items", body: ActionItemsBody(actionItems: items))
     }
+    func editReport(meetingId: String, reportId: String, _ body: ReportEditBody) async throws -> Report {
+        try await request("PATCH", "/api/meetings/\(meetingId)/reports/\(reportId)", body: body)
+    }
     func export(meetingId: String, format: String) async throws -> Data {
         try await raw("GET", "/api/meetings/\(meetingId)/export", query: [URLQueryItem(name: "format", value: format)], accept: "*/*")
     }

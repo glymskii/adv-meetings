@@ -17,6 +17,7 @@ struct MeetingDetailView: View {
     @State private var busy = false
     @State private var editingTask: TaskItem?
     @State private var addingTask = false
+    @State private var editingReport = false
 
     enum Tab: String, CaseIterable { case report = "Отчёт", transcript = "Транскрипт", info = "Инфо" }
 
@@ -39,6 +40,11 @@ struct MeetingDetailView: View {
         .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d) { watchGeneration += 1 } } }
         .sheet(isPresented: $showShare) { if let d = detail { SharesSheet(meetingId: d.id) } }
         .sheet(item: $editingTask) { t in TaskEditorView(task: t) { _ in await load() } }
+        .sheet(isPresented: $editingReport) {
+            if let d = detail, let r = d.report {
+                ReportEditorView(meetingId: d.id, report: r, onSaved: { await load() }, exportAfterSave: { fmt in Task { await export(fmt) } })
+            }
+        }
         .sheet(isPresented: $addingTask) { NewTaskView(meetingId: meetingId) { _ in await load() } }
         .confirmationDialog("Удалить встречу вместе с транскриптом и отчётом?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive) { Task { try? await APIClient.shared.deleteMeeting(meetingId); await LocalStore.shared.remove(meetingId); dismiss() } }
@@ -60,7 +66,7 @@ struct MeetingDetailView: View {
             switch tab {
             case .report:
                 if let r = d.report {
-                    ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true })
+                    ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true }, onEditReport: { editingReport = true })
                 }
                 else if !d.status.isInProgress { ContentUnavailableView("Отчёта пока нет", systemImage: "doc.text", description: Text(d.status == .failed ? (d.error ?? "Обработка не удалась") : "Отчёт появится после обработки записи.")) }
                 else { Spacer() }
@@ -76,6 +82,9 @@ struct MeetingDetailView: View {
     @ToolbarContentBuilder private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
+                if detail?.hasReport == true && detail?.isOwner == true {
+                    Button { editingReport = true } label: { Label("Редактировать текст отчёта", systemImage: "pencil.line") }
+                }
                 if detail?.hasReport == true {
                     Section("Экспорт отчёта") {
                         Button { Task { await export("docx") } } label: { Label("Word (.docx)", systemImage: "doc.richtext") }

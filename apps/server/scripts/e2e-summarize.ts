@@ -95,6 +95,8 @@ const row = {
   cacheReadTokens: res.usage.cacheRead,
   createdBy: "pipeline",
   isCurrent: true,
+  editedAt: null,
+  editedBy: null,
 };
 console.log("\n" + renderMarkdown(tpl, row as never, { startedAt: now, durationSec: 36, platform: "Zoom", templateTitle: tpl.title, confidentiality: "standard", includeInternal: true }));
 await closeDb();

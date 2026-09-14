@@ -9,6 +9,7 @@ struct ReportView: View {
     let onToggleTask: (TaskItem) async -> Void
     let onEditTask: (TaskItem) -> Void
     let onAddTask: () -> Void
+    let onEditReport: () -> Void
 
     var body: some View {
         ScrollView {
@@ -22,7 +23,14 @@ struct ReportView: View {
                         if meeting.confidentiality == "restricted" { Label("Конфиденциально", systemImage: "lock.fill") }
                     }
                     .font(.caption).foregroundStyle(.secondary)
-                    if report.version > 1 { Text("Версия отчёта \(report.version) · \(report.createdBy == "regenerate" ? "пересобран" : "авто")").font(.caption2).foregroundStyle(.tertiary) }
+                    HStack(spacing: 8) {
+                        if report.version > 1 { Text("Версия \(report.version) · \(report.createdBy == "regenerate" ? "пересобран" : "авто")").font(.caption2).foregroundStyle(.tertiary) }
+                        if let e = report.editedAt { Label("Отредактирован \(Fmt.dateTime.string(from: e))", systemImage: "pencil").font(.caption2).foregroundStyle(.tertiary) }
+                    }
+                    if meeting.isOwner {
+                        Button { onEditReport() } label: { Label("Редактировать текст перед экспортом", systemImage: "pencil.line").font(.subheadline) }
+                            .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                    }
                 }
 
                 ForEach(Array(report.sections.enumerated()), id: \.element.key) { i, s in

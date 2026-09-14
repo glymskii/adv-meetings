@@ -23,6 +23,7 @@ import {
   MeetingDetailSchema,
   MeetingSummarySchema,
   RegenerateBody,
+  ReportEditBody,
   ReportSchema,
   SegmentCompleteBody,
   SegmentRequestBody,
@@ -96,6 +97,7 @@ function reportDto(r: Report, t: Template, includeInternal: boolean) {
     markdown: r.markdown,
     createdBy: r.createdBy,
     createdAt: r.createdAt.toISOString(),
+    editedAt: r.editedAt ? r.editedAt.toISOString() : null,
   };
 }
 
@@ -513,6 +515,54 @@ meetingsRoutes.openapi(
     const [r] = await db().select().from(reports).where(and(eq(reports.id, reportId), eq(reports.meetingId, id))).limit(1);
     if (!r) throw new HTTPException(404, { message: "Отчёт не найден" });
     return c.json(reportDto(r, await templateById(r.templateId), a.scope === "full"), 200);
+  },
+);
+
+meetingsRoutes.openapi(
+  createRoute({
+    method: "patch",
+    path: "/{id}/reports/{reportId}",
+    tags: ["reports"],
+    summary: "Отредактировать текст отчёта (перед экспортом): заголовок, резюме, разделы, списки",
+    request: { params: IdParam.extend({ reportId: z.string().uuid() }), body: { content: { "application/json": { schema: ReportEditBody } } } },
+    responses: { 200: { description: "OK", content: { "application/json": { schema: ReportSchema } } }, 404: { description: "Не найдено", content: { "application/json": { schema: ErrorSchema } } } },
+  }),
+  async (c) => {
+    const { id, reportId } = c.req.valid("param");
+    const a = await loadMeetingWithAccess(id, c.get("user"));
+    requireOwner(a);
+    const body = c.req.valid("json");
+    const [r0] = await db().select().from(reports).where(and(eq(reports.id, reportId), eq(reports.meetingId, id))).limit(1);
+    if (!r0) throw new HTTPException(404, { message: "Отчёт не найден" });
+    const t = await templateById(r0.templateId);
+    const patch: Partial<Report> = {};
+    if (body.title !== undefined) patch.title = body.title;
+    if (body.summary !== undefined) patch.summary = body.summary;
+    if (body.sections !== undefined) {
+      const byKey = new Map(body.sections.map((s) => [s.key, s.content]));
+      const existing = r0.sections.map((s) => (byKey.has(s.key) ? { ...s, content: byKey.get(s.key)! } : s));
+      // Разделы шаблона, которых ещё не было в отчёте (модель их пропустила) — добавляем
+      for (const [key, content] of byKey) {
+        if (!existing.some((s) => s.key === key)) {
+          const ts = t.reportSections.find((x) => x.key === key && x.kind === "text");
+          if (ts) existing.push({ key, heading: ts.heading, content, internalOnly: ts.internalOnly ?? false });
+        }
+      }
+      patch.sections = existing;
+    }
+    if (body.participants !== undefined) patch.participants = body.participants.map((p) => ({ name: p.name, role: p.role ?? null, company: p.company ?? null, side: p.side ?? null }));
+    if (body.decisions !== undefined) patch.decisions = body.decisions;
+    if (body.openQuestions !== undefined) patch.openQuestions = body.openQuestions;
+    if (body.clientRequests !== undefined) patch.clientRequests = body.clientRequests;
+    if (body.missingInfo !== undefined) patch.missingInfo = body.missingInfo;
+    if (body.nextMeeting !== undefined) patch.nextMeeting = body.nextMeeting;
+    patch.editedAt = new Date();
+    patch.editedBy = c.get("user").id;
+    const merged = { ...r0, ...patch } as Report;
+    patch.markdown = renderMarkdown(t, merged, { startedAt: a.meeting.startedAt, durationSec: a.meeting.durationSec, platform: a.meeting.platform, templateTitle: t.title, confidentiality: a.meeting.confidentiality, includeInternal: true });
+    const [r] = await db().update(reports).set(patch).where(eq(reports.id, reportId)).returning();
+    if (body.title !== undefined) await db().update(meetings).set({ title: body.title }).where(eq(meetings.id, id));
+    return c.json(reportDto(r!, t, true), 200);
   },
 );
 

@@ -186,8 +186,24 @@ export const ReportSchema = z
     markdown: z.string(),
     createdBy: z.string(),
     createdAt: z.string(),
+    editedAt: z.string().nullable(),
   })
   .openapi("Report");
+
+export const ReportEditBody = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    summary: z.string().max(5000).optional(),
+    /** Текстовые разделы (kind=text): key → markdown */
+    sections: z.array(z.object({ key: z.string(), content: z.string().max(20000) })).optional(),
+    participants: z.array(ParticipantSchema).optional(),
+    decisions: z.array(DecisionSchema).optional(),
+    openQuestions: z.array(z.string().max(1000)).optional(),
+    clientRequests: z.array(z.string().max(1000)).optional(),
+    missingInfo: z.array(z.string().max(1000)).optional(),
+    nextMeeting: NextMeetingSchema.nullable().optional(),
+  })
+  .openapi("ReportEditBody");
 
 export const MeetingDetailSchema = MeetingSummarySchema.extend({
   tasks: z.array(z.lazy(() => TaskSchema)),

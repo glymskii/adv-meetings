@@ -62,6 +62,8 @@ const report = {
   costUsd: "0",
   createdBy: "pipeline",
   isCurrent: true,
+  editedAt: null,
+  editedBy: null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };

@@ -286,6 +286,19 @@ struct Report: Codable, Hashable, Identifiable {
     let markdown: String
     let createdBy: String
     let createdAt: Date
+    let editedAt: Date?
+}
+
+struct ReportEditBody: Encodable {
+    struct Section: Encodable { let key: String; let content: String }
+    var title: String?
+    var summary: String?
+    var sections: [Section]?
+    var participants: [Participant]?
+    var decisions: [Decision]?
+    var openQuestions: [String]?
+    var clientRequests: [String]?
+    var missingInfo: [String]?
 }
 
 struct ReportVersion: Codable, Hashable, Identifiable {

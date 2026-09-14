@@ -217,6 +217,9 @@ export const reports = pgTable(
     costUsd: numeric("cost_usd", { precision: 10, scale: 4 }),
     createdBy: text("created_by").notNull().default("pipeline"), // pipeline | regenerate
     isCurrent: boolean("is_current").notNull().default(true),
+    /** Ручные правки текста отчёта пользователем (перед экспортом) */
+    editedAt: timestamp("edited_at", { withTimezone: true }),
+    editedBy: text("edited_by"),
     ...timestamps,
   },
   (t) => [uniqueIndex("reports_meeting_version_idx").on(t.meetingId, t.version)],
