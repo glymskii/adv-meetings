@@ -18,7 +18,6 @@ struct MeetingDetailView: View {
     @State private var editingTask: TaskItem?
     @State private var addingTask = false
     @State private var editingReport = false
-    @State private var regenerateMode: RegenerateSheet.Mode = .fix
 
     enum Tab: String, CaseIterable { case report = "Отчёт", transcript = "Транскрипт", info = "Инфо" }
 
@@ -38,7 +37,7 @@ struct MeetingDetailView: View {
         .task { await load(); await watchStatus() }
         .task(id: watchGeneration) { if watchGeneration > 0 { await load(); await watchStatus() } }
         .sheet(item: $exportURL) { url in ShareSheet(items: [url]) }
-        .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d, mode: regenerateMode) { watchGeneration += 1 } } }
+        .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d) { watchGeneration += 1 } } }
         .sheet(isPresented: $showShare) { if let d = detail { SharesSheet(meetingId: d.id) } }
         .sheet(item: $editingTask) { t in TaskEditorView(task: t) { _ in await load() } }
         .sheet(isPresented: $editingReport) {
@@ -67,7 +66,7 @@ struct MeetingDetailView: View {
             switch tab {
             case .report:
                 if let r = d.report {
-                    ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true }, onEditReport: { editingReport = true }, onAIFix: { regenerateMode = .fix; showRegenerate = true })
+                    ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true }, onEditReport: { editingReport = true }, onAIFix: { showRegenerate = true })
                 }
                 else if !d.status.isInProgress { ContentUnavailableView("Отчёта пока нет", systemImage: "doc.text", description: Text(d.status == .failed ? (d.error ?? "Обработка не удалась") : "Отчёт появится после обработки записи.")) }
                 else { Spacer() }
@@ -97,8 +96,7 @@ struct MeetingDetailView: View {
                     Button { Task { await export("txt") } } label: { Label("Транскрипт (.txt)", systemImage: "text.quote") }
                 }
                 if detail?.hasTranscript == true && detail?.isOwner == true {
-                    Button { regenerateMode = .fix; showRegenerate = true } label: { Label("Исправить с помощью ИИ…", systemImage: "wand.and.stars") }
-                    Button { regenerateMode = .rebuild; showRegenerate = true } label: { Label("Пересобрать отчёт…", systemImage: "arrow.clockwise") }
+                    Button { showRegenerate = true } label: { Label("Исправить / пересобрать отчёт…", systemImage: "wand.and.stars") }
                 }
                 if detail?.isOwner == true {
                     Button { showShare = true } label: { Label("Поделиться с коллегой", systemImage: "person.badge.plus") }

@@ -221,11 +221,8 @@ struct MeetingInfoView: View {
 
 @MainActor
 struct RegenerateSheet: View {
-    enum Mode { case fix, rebuild }
-
     let detail: MeetingDetail
     let onDone: () async -> Void
-    var mode: Mode = .fix
     @Environment(TemplateStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var templateId: String
@@ -235,26 +232,63 @@ struct RegenerateSheet: View {
     @State private var error: String?
     @FocusState private var focused: Bool
 
-    init(detail: MeetingDetail, mode: Mode = .fix, onDone: @escaping () async -> Void) {
+    init(detail: MeetingDetail, onDone: @escaping () async -> Void) {
         self.detail = detail
-        self.mode = mode
         self.onDone = onDone
         _templateId = State(initialValue: detail.templateId)
     }
 
-    private let examples = [
-        "Бюджет — 40 млн тенге на медиа, продакшн отдельно",
-        "Спикер 2 — это Данияр, бренд-менеджер клиента",
-        "Убери внутренние комментарии про сроки",
-        "Добавь в action plan: Айгерим готовит КП к пятнице",
-    ]
+    /// Подсказка: короткая подпись чипса и текст, который вставляется в поле (с местом для ответа).
+    struct Suggestion: Identifiable, Hashable {
+        let id: String
+        let label: String
+        let text: String
+    }
+
+    /// Подсказки формируются из контекста записи: неназванные спикеры, «не озвучено», задачи без ответственного/срока, открытые вопросы.
+    private var suggestions: [Suggestion] {
+        var out: [Suggestion] = []
+        if let tr = detail.transcript {
+            for id in tr.speakerIds where (tr.speakers[id] ?? "").isEmpty {
+                let label = tr.label(for: id)
+                out.append(Suggestion(id: "spk-\(id)", label: "\(label) — это…", text: "\(label) — это "))
+            }
+        }
+        if let r = detail.report {
+            for (i, m) in r.missingInfo.prefix(6).enumerated() {
+                let short = m.count > 42 ? String(m.prefix(40)) + "…" : m
+                out.append(Suggestion(id: "miss-\(i)", label: "Уточнить: \(short)", text: "\(m): "))
+            }
+            for (i, q) in r.openQuestions.prefix(4).enumerated() {
+                let short = q.count > 42 ? String(q.prefix(40)) + "…" : q
+                out.append(Suggestion(id: "q-\(i)", label: "Ответ: \(short)", text: "Ответ на вопрос «\(q)»: "))
+            }
+        }
+        for t in detail.tasks.prefix(12) where !t.isDone {
+            let short = t.task.count > 36 ? String(t.task.prefix(34)) + "…" : t.task
+            if t.assigneeName == nil || (t.assigneeName?.hasPrefix("Спикер") ?? false) {
+                out.append(Suggestion(id: "asg-\(t.id)", label: "Ответственный: \(short)", text: "Ответственный за задачу «\(t.task)» — "))
+            }
+            if t.deadlineDate == nil || t.deadlineIsDefault {
+                out.append(Suggestion(id: "dl-\(t.id)", label: "Срок: \(short)", text: "Срок задачи «\(t.task)» — "))
+            }
+        }
+        if out.isEmpty {
+            out = [
+                Suggestion(id: "g1", label: "Уточнить бюджет", text: "Бюджет: "),
+                Suggestion(id: "g2", label: "Убрать раздел…", text: "Убери из отчёта "),
+                Suggestion(id: "g3", label: "Добавить задачу…", text: "Добавь в action plan: "),
+            ]
+        }
+        return Array(out.prefix(14))
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
                     TextEditor(text: $instructions)
-                        .frame(minHeight: 120)
+                        .frame(minHeight: 110)
                         .focused($focused)
                         .overlay(alignment: .topLeading) {
                             if instructions.isEmpty {
@@ -262,18 +296,31 @@ struct RegenerateSheet: View {
                                     .foregroundStyle(.tertiary).font(.subheadline).padding(.top, 8).padding(.leading, 4).allowsHitTesting(false)
                             }
                         }
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(examples, id: \.self) { ex in
-                                Button(ex) { instructions += (instructions.isEmpty ? "" : "\n") + ex }
-                                    .buttonStyle(.bordered).controlSize(.small).font(.caption)
-                            }
-                        }
-                    }
                 } header: {
                     Text("Что исправить в отчёте")
                 } footer: {
-                    Text("ИИ возьмёт транскрипт и текущую версию отчёта и внесёт ваши правки, сохранив остальное. Прежняя версия остаётся в истории (вкладка «Инфо»).")
+                    Text("Пусто — отчёт просто пересоберётся по выбранному шаблону. С текстом — ИИ возьмёт транскрипт и текущую версию и внесёт правки, сохранив остальное. Прежняя версия остаётся в истории (вкладка «Инфо»).")
+                }
+                Section {
+                    FlowLayout(spacing: 6) {
+                        ForEach(suggestions) { sg in
+                            Button {
+                                let sep = instructions.isEmpty || instructions.hasSuffix("\n") ? "" : "\n"
+                                instructions += sep + sg.text
+                                focused = true
+                            } label: {
+                                Text(sg.label).font(.caption).lineLimit(1)
+                                    .padding(.horizontal, 10).padding(.vertical, 6)
+                                    .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                } header: {
+                    Text("Подсказки по этой записи")
+                } footer: {
+                    Text("Нажмите подсказку — она вставится в поле, допишите ответ.")
                 }
                 Section("Шаблон отчёта") {
                     Picker("Тип встречи", selection: $templateId) {
@@ -287,7 +334,8 @@ struct RegenerateSheet: View {
                 }
                 if let error { Section { ErrorBanner(message: error) } }
             }
-            .navigationTitle(mode == .fix ? "Исправить с помощью ИИ" : "Пересобрать отчёт")
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Исправить отчёт")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
@@ -296,7 +344,6 @@ struct RegenerateSheet: View {
                 }
                 ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
             }
-            .onAppear { if mode == .fix { focused = true } }
         }
     }
 
