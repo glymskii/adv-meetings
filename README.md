@@ -91,6 +91,24 @@ xcodebuild -project ADVMeetings.xcodeproj -scheme ADVMeetings -configuration Deb
   API_BASE_URL=https://<api-domain> build
 ```
 
+## Релиз в TestFlight
+
+Приложение в App Store Connect: **ADV Meetings** (ID 6812003830), внутренняя группа **ADV Internal** с доступом ко всем сборкам. Номер билда = число коммитов.
+
+```bash
+cd apps/ios && xcodegen generate
+BUILD=$(git rev-list --count HEAD)
+xcodebuild -project ADVMeetings.xcodeproj -scheme ADVMeetings -configuration Release \
+  -destination "generic/platform=iOS" -archivePath /tmp/adv-archive/ADVMeetings.xcarchive \
+  -allowProvisioningUpdates -authenticationKeyPath <AuthKey.p8> -authenticationKeyID <KEY_ID> -authenticationKeyIssuerID <ISSUER_ID> \
+  CURRENT_PROJECT_VERSION=$BUILD archive
+xcodebuild -exportArchive -archivePath /tmp/adv-archive/ADVMeetings.xcarchive -exportOptionsPlist ExportOptions.plist \
+  -exportPath /tmp/adv-export -allowProvisioningUpdates \
+  -authenticationKeyPath <AuthKey.p8> -authenticationKeyID <KEY_ID> -authenticationKeyIssuerID <ISSUER_ID>
+```
+
+`ExportOptions.plist` настроен на прямую загрузку в App Store Connect. Статус обработки и группы: `pnpm --filter @adv/server exec tsx scripts/asc.ts builds | group | testers`. Внутренних тестировщиков (участников команды) добавляют в группу в App Store Connect; внешних — по email через `asc.ts add`, первая внешняя сборка проходит Beta App Review.
+
 ## Деплой (Railway)
 
 Проект `adv-meetings`: Postgres, bucket `audio-temp`, сервисы `api` и `worker` из одного образа `apps/server/Dockerfile` (контекст сборки — корень репозитория). `api` при старте применяет миграции и сид шаблонов.
