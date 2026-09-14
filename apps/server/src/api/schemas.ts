@@ -202,7 +202,7 @@ export const MeetingDetailSchema = MeetingSummarySchema.extend({
 export const SegmentRequestBody = z
   .object({
     seq: z.number().int().min(0).max(9999),
-    contentType: z.enum(["audio/mp4", "audio/m4a", "audio/aac", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "video/mp4", "audio/x-m4a"]).default("audio/mp4"),
+    contentType: z.enum(["audio/mp4", "audio/m4a", "audio/aac", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/ogg", "video/mp4", "audio/x-m4a", "video/quicktime", "audio/webm", "video/webm", "audio/flac", "application/octet-stream"]).default("audio/mp4"),
     kind: z.enum(["segment", "import"]).default("segment"),
     extension: z.string().regex(/^[a-z0-9]{1,5}$/).default("m4a"),
   })

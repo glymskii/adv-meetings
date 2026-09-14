@@ -354,11 +354,21 @@ meetingsRoutes.openapi(
     requireOwner(a);
     const body = c.req.valid("json");
     const d = db();
+    // Сегменты, для которых клиент не успел вызвать /complete (фоновая загрузка): проверяем наличие в bucket сами
+    const pending = await d
+      .select()
+      .from(audioObjects)
+      .where(and(eq(audioObjects.meetingId, a.meeting.id), isNull(audioObjects.deletedAt), isNull(audioObjects.uploadedAt)));
+    for (const p of pending) {
+      const head = await headObject(p.objectKey);
+      if (head && head.size > 0) await d.update(audioObjects).set({ uploadedAt: new Date(), sizeBytes: head.size }).where(eq(audioObjects.id, p.id));
+    }
     const uploaded = await d
       .select({ n: sql<number>`count(*)::int` })
       .from(audioObjects)
       .where(and(eq(audioObjects.meetingId, a.meeting.id), isNull(audioObjects.deletedAt), sql`${audioObjects.uploadedAt} is not null`));
     if ((uploaded[0]?.n ?? 0) === 0) throw new HTTPException(409, { message: "Нет загруженных сегментов аудио" });
+    await d.update(meetings).set({ segmentCount: uploaded[0]?.n ?? 0 }).where(eq(meetings.id, a.meeting.id));
     const endedAt = body.endedAt ? new Date(body.endedAt) : new Date();
     const durationSec = body.durationSec ?? Math.max(0, Math.round((endedAt.getTime() - a.meeting.startedAt.getTime()) / 1000));
     const [m] = await d

@@ -1,0 +1,193 @@
+import SwiftUI
+
+@MainActor
+struct MeetingDetailView: View {
+    let meetingId: String
+    @Environment(TemplateStore.self) private var templates
+    @Environment(\.dismiss) private var dismiss
+    @State private var detail: MeetingDetail?
+    @State private var error: String?
+    @State private var tab: Tab = .report
+    @State private var watchGeneration = 0
+    @State private var exporting = false
+    @State private var exportURL: URL?
+    @State private var showRegenerate = false
+    @State private var showShare = false
+    @State private var confirmDelete = false
+    @State private var busy = false
+
+    enum Tab: String, CaseIterable { case report = "Отчёт", transcript = "Транскрипт", info = "Инфо" }
+
+    var body: some View {
+        Group {
+            if let d = detail {
+                content(d)
+            } else if let error {
+                ContentUnavailableView("Не удалось загрузить", systemImage: "exclamationmark.triangle", description: Text(error))
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .navigationTitle(detail?.title ?? "Встреча")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { toolbar }
+        .task { await load(); await watchStatus() }
+        .task(id: watchGeneration) { if watchGeneration > 0 { await load(); await watchStatus() } }
+        .sheet(item: $exportURL) { url in ShareSheet(items: [url]) }
+        .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d) { watchGeneration += 1 } } }
+        .sheet(isPresented: $showShare) { if let d = detail { SharesSheet(meetingId: d.id) } }
+        .confirmationDialog("Удалить встречу вместе с транскриптом и отчётом?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Удалить", role: .destructive) { Task { try? await APIClient.shared.deleteMeeting(meetingId); await LocalStore.shared.remove(meetingId); dismiss() } }
+        }
+    }
+
+    @ViewBuilder private func content(_ d: MeetingDetail) -> some View {
+        VStack(spacing: 0) {
+            if d.status.isInProgress || d.status == .failed || d.status == .recording {
+                ProcessingBanner(detail: d) { Task { await retry() } }
+            }
+            if d.hasReport || d.hasTranscript {
+                Picker("", selection: $tab) {
+                    ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16).padding(.vertical, 8)
+            }
+            switch tab {
+            case .report:
+                if let r = d.report { ReportView(report: r, meeting: d) { items in await updateActionItems(items) } }
+                else if !d.status.isInProgress { ContentUnavailableView("Отчёта пока нет", systemImage: "doc.text", description: Text(d.status == .failed ? (d.error ?? "Обработка не удалась") : "Отчёт появится после обработки записи.")) }
+                else { Spacer() }
+            case .transcript:
+                if let t = d.transcript { TranscriptView(transcript: t, meetingId: d.id, canEdit: d.isOwner) { await load() } }
+                else { ContentUnavailableView("Транскрипта нет", systemImage: "text.quote") }
+            case .info:
+                MeetingInfoView(detail: d, template: templates.template(id: d.templateId))
+            }
+        }
+    }
+
+    @ToolbarContentBuilder private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                if detail?.hasReport == true {
+                    Section("Экспорт отчёта") {
+                        Button { Task { await export("docx") } } label: { Label("Word (.docx)", systemImage: "doc.richtext") }
+                        Button { Task { await export("pdf") } } label: { Label("PDF", systemImage: "doc") }
+                        Button { Task { await export("md") } } label: { Label("Markdown", systemImage: "text.alignleft") }
+                    }
+                }
+                if detail?.hasTranscript == true {
+                    Button { Task { await export("txt") } } label: { Label("Транскрипт (.txt)", systemImage: "text.quote") }
+                    Button { showRegenerate = true } label: { Label("Пересобрать отчёт…", systemImage: "arrow.clockwise") }
+                }
+                if detail?.isOwner == true {
+                    Button { showShare = true } label: { Label("Поделиться с коллегой", systemImage: "person.badge.plus") }
+                    Divider()
+                    Button(role: .destructive) { confirmDelete = true } label: { Label("Удалить встречу", systemImage: "trash") }
+                }
+            } label: {
+                if exporting || busy { ProgressView() } else { Image(systemName: "ellipsis.circle") }
+            }
+            .disabled(detail == nil)
+        }
+    }
+
+    private func load() async {
+        do { detail = try await APIClient.shared.meeting(meetingId); error = nil } catch { self.error = error.localizedDescription }
+    }
+
+    /// Следит за статусом обработки через SSE (отменяется SwiftUI при уходе с экрана); при обрыве — опрос раз в 5 с.
+    private func watchStatus() async {
+        guard let d = detail, d.status.isInProgress || d.status == .recording else { return }
+        do {
+            for try await ev in APIClient.shared.statusEvents(meetingId: meetingId) {
+                if Task.isCancelled { return }
+                await load()
+                if ev.status == .done || ev.status == .failed { return }
+            }
+        } catch {
+            if Task.isCancelled { return }
+        }
+        while !Task.isCancelled, let d = detail, d.status.isInProgress {
+            try? await Task.sleep(for: .seconds(5))
+            if Task.isCancelled { return }
+            await load()
+        }
+    }
+
+    private func retry() async {
+        busy = true; defer { busy = false }
+        _ = try? await APIClient.shared.retry(meetingId: meetingId)
+        watchGeneration += 1
+    }
+
+    private func export(_ format: String) async {
+        exporting = true; defer { exporting = false }
+        do {
+            let data = try await APIClient.shared.export(meetingId: meetingId, format: format)
+            let name = (detail?.title ?? "report").replacingOccurrences(of: "/", with: "-").prefix(60)
+            let url = URL.temporaryDirectory.appending(path: "\(name).\(format)")
+            try data.write(to: url, options: .atomic)
+            exportURL = url
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func updateActionItems(_ items: [ActionItem]) async {
+        guard let r = detail?.report else { return }
+        if let updated = try? await APIClient.shared.updateActionItems(meetingId: meetingId, reportId: r.id, items: items), var d = detail {
+            d = MeetingDetail(id: d.id, title: d.title, status: d.status, statusDetail: d.statusDetail, error: d.error, templateId: d.templateId, templateCode: d.templateCode, templateTitle: d.templateTitle, templateEmoji: d.templateEmoji, group: d.group, source: d.source, confidentiality: d.confidentiality, startedAt: d.startedAt, endedAt: d.endedAt, durationSec: d.durationSec, segmentCount: d.segmentCount, hasTranscript: d.hasTranscript, hasReport: d.hasReport, isOwner: d.isOwner, createdAt: d.createdAt, updatedAt: d.updatedAt, contextFields: d.contextFields, participantsHint: d.participantsHint, numSpeakersHint: d.numSpeakersHint, languageHint: d.languageHint, platform: d.platform, markers: d.markers, transcript: d.transcript, report: updated, reportVersions: d.reportVersions)
+            detail = d
+        }
+    }
+}
+
+extension URL: @retroactive Identifiable { public var id: String { absoluteString } }
+
+struct ProcessingBanner: View {
+    let detail: MeetingDetail
+    let onRetry: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                if detail.status.isInProgress { ProgressView() }
+                Image(systemName: detail.status == .failed ? "exclamationmark.triangle.fill" : "waveform.and.magnifyingglass")
+                    .foregroundStyle(detail.status == .failed ? .red : .accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(detail.status.title).font(.subheadline.weight(.semibold))
+                    Text(detail.status == .failed ? (detail.error ?? "Не удалось обработать запись") : (detail.statusDetail ?? "Обычно занимает 2–5 минут. Можно закрыть — пришлём уведомление."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if detail.status == .failed && detail.isOwner { Button("Повторить", action: onRetry).buttonStyle(.bordered).controlSize(.small) }
+            }
+            if detail.status.isInProgress { PipelineSteps(status: detail.status) }
+        }
+        .padding(12)
+        .background(Color(.secondarySystemBackground))
+    }
+}
+
+struct PipelineSteps: View {
+    let status: MeetingStatus
+    private let steps: [(MeetingStatus, String)] = [(.queued, "Очередь"), (.processing, "Аудио"), (.transcribing, "Расшифровка"), (.summarizing, "Отчёт")]
+    var body: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { i, step in
+                let idx = steps.firstIndex { $0.0 == status } ?? -1
+                let done = i < idx, current = i == idx
+                HStack(spacing: 4) {
+                    Circle().fill(done ? Color.green : current ? Color.accentColor : Color.secondary.opacity(0.3)).frame(width: 8, height: 8)
+                    Text(step.1).font(.caption2).foregroundStyle(current ? .primary : .secondary)
+                }
+                if i < steps.count - 1 { Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1) }
+            }
+        }
+    }
+}
+
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController { UIActivityViewController(activityItems: items, applicationActivities: nil) }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
+}

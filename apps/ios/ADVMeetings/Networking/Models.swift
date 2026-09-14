@@ -1,0 +1,390 @@
+import Foundation
+
+// DTO, зеркалящие OpenAPI сервера (apps/server/src/api/schemas.ts)
+
+struct APIErrorBody: Decodable {
+    let error: String
+    let code: String?
+}
+
+struct TemplateField: Codable, Hashable, Identifiable {
+    var id: String { key }
+    let key: String
+    let label: String
+    let hint: String?
+    let type: String?
+    let askBeforeRecording: Bool?
+}
+
+struct TemplateSection: Codable, Hashable, Identifiable {
+    var id: String { key }
+    let key: String
+    let heading: String
+    let kind: String
+    let guidance: String?
+    let internalOnly: Bool?
+}
+
+struct MeetingTemplate: Codable, Hashable, Identifiable {
+    let id: String
+    let code: String
+    let version: Int
+    let group: String
+    let category: String
+    let title: String
+    let subtitle: String?
+    let goal: String
+    let reportTitle: String
+    let emoji: String
+    let color: String
+    let confidentiality: String
+    let allowConfidentialityChoice: Bool
+    let slaHours: Int
+    let sendTo: String?
+    let commonFields: [TemplateField]
+    let specificFields: [TemplateField]
+    let reportSections: [TemplateSection]
+    let tips: [String]
+    let isDraft: Bool
+    let sortOrder: Int
+
+    var isRestricted: Bool { confidentiality == "restricted" }
+}
+
+struct TemplateGroup: Codable, Hashable, Identifiable {
+    var id: String { code }
+    let code: String
+    let title: String
+    let subtitle: String
+    let emoji: String
+    let color: String
+    let order: Int
+}
+
+struct TemplateCategory: Codable, Hashable, Identifiable {
+    var id: String { code }
+    let code: String
+    let title: String
+    let order: Int
+}
+
+struct TemplatesResponse: Codable {
+    let groups: [TemplateGroup]
+    let categories: [TemplateCategory]
+    let templates: [MeetingTemplate]
+}
+
+struct Participant: Codable, Hashable, Identifiable {
+    var id: String { name + (role ?? "") + (company ?? "") }
+    var name: String
+    var role: String?
+    var company: String?
+    var side: String?
+}
+
+struct Marker: Codable, Hashable, Identifiable {
+    var id: String { createdAt }
+    let atSec: Double
+    let note: String?
+    let createdAt: String
+}
+
+enum MeetingStatus: String, Codable {
+    case recording, uploading, queued, processing, transcribing, summarizing, done, failed
+
+    var title: String {
+        switch self {
+        case .recording: return "Идёт запись"
+        case .uploading: return "Загрузка"
+        case .queued: return "В очереди"
+        case .processing: return "Подготовка аудио"
+        case .transcribing: return "Транскрибация"
+        case .summarizing: return "Составление отчёта"
+        case .done: return "Готово"
+        case .failed: return "Ошибка"
+        }
+    }
+
+    var isInProgress: Bool { [.queued, .processing, .transcribing, .summarizing, .uploading].contains(self) }
+}
+
+/// Значение поля контекста: строка, список строк, число или null
+enum ContextValue: Codable, Hashable {
+    case string(String)
+    case list([String])
+    case number(Double)
+    case null
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null; return }
+        if let s = try? c.decode(String.self) { self = .string(s); return }
+        if let l = try? c.decode([String].self) { self = .list(l); return }
+        if let n = try? c.decode(Double.self) { self = .number(n); return }
+        throw DecodingError.dataCorruptedError(in: c, debugDescription: "Неизвестный тип ContextValue")
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try c.encode(s)
+        case .list(let l): try c.encode(l)
+        case .number(let n): try c.encode(n)
+        case .null: try c.encodeNil()
+        }
+    }
+
+    var displayText: String {
+        switch self {
+        case .string(let s): return s
+        case .list(let l): return l.joined(separator: ", ")
+        case .number(let n): return n.formatted()
+        case .null: return ""
+        }
+    }
+}
+
+struct MeetingSummary: Codable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    let status: MeetingStatus
+    let statusDetail: String?
+    let error: String?
+    let templateId: String
+    let templateCode: String
+    let templateTitle: String
+    let templateEmoji: String
+    let group: String
+    let source: String
+    let confidentiality: String
+    let startedAt: Date
+    let endedAt: Date?
+    let durationSec: Int?
+    let segmentCount: Int
+    let hasTranscript: Bool
+    let hasReport: Bool
+    let isOwner: Bool
+    let createdAt: Date
+    let updatedAt: Date
+}
+
+struct MeetingsPage: Codable {
+    let items: [MeetingSummary]
+    let total: Int
+}
+
+struct TranscriptSegment: Codable, Hashable, Identifiable {
+    var id: String { "\(start)-\(speakerId)" }
+    let start: Double
+    let end: Double
+    let speakerId: String
+    let text: String
+}
+
+struct Transcript: Codable, Hashable {
+    let id: String
+    let provider: String
+    let languageCode: String?
+    let segments: [TranscriptSegment]
+    let speakers: [String: String]
+    let speakerIds: [String]
+    let audioDurationSec: Double?
+    let wordCount: Int
+    let createdAt: Date
+
+    func label(for speakerId: String) -> String {
+        if let custom = speakers[speakerId], !custom.trimmingCharacters(in: .whitespaces).isEmpty { return custom }
+        let digits = speakerId.filter(\.isNumber)
+        if let n = Int(digits) { return "Спикер \(n + 1)" }
+        return speakerId
+    }
+}
+
+struct ActionItem: Codable, Hashable, Identifiable {
+    var id: String { task + (assignee ?? "") }
+    var assignee: String?
+    var task: String
+    var deadline: String?
+    var quote: String?
+    var done: Bool?
+}
+
+struct Decision: Codable, Hashable, Identifiable {
+    var id: String { decision }
+    let decision: String
+    let owner: String?
+    let deadline: String?
+}
+
+struct NextMeeting: Codable, Hashable {
+    let when: String?
+    let format: String?
+    let agenda: String?
+}
+
+struct RenderedTable: Codable, Hashable {
+    let columns: [String]
+    let rows: [[String]]
+}
+
+struct RenderedSection: Codable, Hashable, Identifiable {
+    var id: String { key }
+    let key: String
+    let heading: String
+    let kind: String
+    let internalOnly: Bool
+    let content: String
+    let table: RenderedTable?
+    let items: [String]?
+}
+
+struct Report: Codable, Hashable, Identifiable {
+    let id: String
+    let version: Int
+    let templateId: String
+    let templateCode: String
+    let reportTitle: String
+    let model: String
+    let effort: String?
+    let title: String
+    let summary: String
+    let participants: [Participant]
+    let sections: [RenderedSection]
+    var actionItems: [ActionItem]
+    let decisions: [Decision]
+    let openQuestions: [String]
+    let clientRequests: [String]
+    let missingInfo: [String]
+    let nextMeeting: NextMeeting?
+    let markdown: String
+    let createdBy: String
+    let createdAt: Date
+}
+
+struct ReportVersion: Codable, Hashable, Identifiable {
+    let id: String
+    let version: Int
+    let templateCode: String
+    let createdAt: Date
+    let createdBy: String
+}
+
+struct MeetingDetail: Codable, Hashable, Identifiable {
+    let id: String
+    let title: String
+    let status: MeetingStatus
+    let statusDetail: String?
+    let error: String?
+    let templateId: String
+    let templateCode: String
+    let templateTitle: String
+    let templateEmoji: String
+    let group: String
+    let source: String
+    let confidentiality: String
+    let startedAt: Date
+    let endedAt: Date?
+    let durationSec: Int?
+    let segmentCount: Int
+    let hasTranscript: Bool
+    let hasReport: Bool
+    let isOwner: Bool
+    let createdAt: Date
+    let updatedAt: Date
+    let contextFields: [String: ContextValue]
+    let participantsHint: [Participant]
+    let numSpeakersHint: Int?
+    let languageHint: String?
+    let platform: String?
+    let markers: [Marker]
+    let transcript: Transcript?
+    let report: Report?
+    let reportVersions: [ReportVersion]
+
+    var summary: MeetingSummary {
+        MeetingSummary(id: id, title: title, status: status, statusDetail: statusDetail, error: error, templateId: templateId, templateCode: templateCode, templateTitle: templateTitle, templateEmoji: templateEmoji, group: group, source: source, confidentiality: confidentiality, startedAt: startedAt, endedAt: endedAt, durationSec: durationSec, segmentCount: segmentCount, hasTranscript: hasTranscript, hasReport: hasReport, isOwner: isOwner, createdAt: createdAt, updatedAt: updatedAt)
+    }
+}
+
+struct CreateMeetingBody: Encodable {
+    var templateId: String
+    var title: String?
+    var source: String = "recorded"
+    var startedAt: String?
+    var contextFields: [String: ContextValue] = [:]
+    var participantsHint: [Participant] = []
+    var numSpeakersHint: Int?
+    var languageHint: String?
+    var platform: String?
+    var confidentiality: String?
+    var deviceId: String?
+}
+
+struct UpdateMeetingBody: Encodable {
+    var title: String?
+    var contextFields: [String: ContextValue]?
+    var participantsHint: [Participant]?
+    var numSpeakersHint: Int?
+    var languageHint: String?
+    var platform: String?
+    var markers: [Marker]?
+}
+
+struct SegmentRequestBody: Encodable {
+    var seq: Int
+    var contentType: String = "audio/mp4"
+    var kind: String = "segment"
+    var fileExtension: String = "m4a"
+
+    enum CodingKeys: String, CodingKey { case seq, contentType, kind, fileExtension = "extension" }
+}
+
+struct SegmentUpload: Decodable {
+    let seq: Int
+    let objectKey: String
+    let uploadUrl: String
+    let expiresInSec: Int
+    let headers: [String: String]
+}
+
+struct SegmentCompleteBody: Encodable {
+    var durationSec: Double?
+    var sizeBytes: Int?
+}
+
+struct FinalizeBody: Encodable {
+    var endedAt: String?
+    var durationSec: Int?
+    var markers: [Marker]?
+}
+
+struct SpeakersBody: Encodable { let speakers: [String: String] }
+struct RegenerateBody: Encodable { var templateId: String?; var effort: String?; var draft: Bool? }
+struct ActionItemsBody: Encodable { let actionItems: [ActionItem] }
+struct ShareBody: Encodable { let email: String; var scope: String = "report" }
+struct Share: Decodable, Identifiable { let id: String; let recipientEmail: String; let scope: String; let createdAt: Date }
+struct DeviceBody: Encodable { let platform: String; let pushToken: String; let appVersion: String? }
+
+struct Me: Codable, Hashable {
+    let id: String
+    let email: String
+    let name: String
+    let image: String?
+    let role: String
+    let agencyId: String?
+    let agencyName: String?
+}
+
+struct OTPSendBody: Encodable { let email: String; let type: String }
+struct OTPVerifyBody: Encodable { let email: String; let otp: String }
+struct AuthUser: Decodable { let id: String; let email: String; let name: String? }
+struct OTPVerifyResponse: Decodable { let token: String; let user: AuthUser }
+struct SocialIdToken: Encodable { let token: String; var nonce: String?; var accessToken: String? }
+struct SocialSignInBody: Encodable { let provider: String; let idToken: SocialIdToken }
+
+struct StatusEvent: Decodable {
+    let status: MeetingStatus
+    let statusDetail: String?
+    let error: String?
+    let updatedAt: Date
+}

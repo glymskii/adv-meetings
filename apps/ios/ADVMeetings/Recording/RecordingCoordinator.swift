@@ -1,0 +1,389 @@
+import ActivityKit
+import AVFoundation
+import Foundation
+import Observation
+import os
+import UIKit
+
+/// Управляет жизненным циклом записи встречи: рекордер, сегменты, Live Activity, прерывания, финализация.
+@Observable
+@MainActor
+final class RecordingCoordinator {
+    static let shared = RecordingCoordinator()
+
+    enum Phase: Equatable { case idle, recording, paused, interrupted, stopping, uploading, finalizing, finished, failed(String) }
+
+    private(set) var phase: Phase = .idle
+    private(set) var meeting: LocalMeeting?
+    private(set) var elapsed: TimeInterval = 0
+    private(set) var level: Float = 0
+    private(set) var uploadedSegments = 0
+    private(set) var totalSegments = 0
+    var isPresentingRecorder = false
+    /// id встречи, обработка которой только что запущена — для перехода на экран прогресса
+    var finalizedMeetingId: String?
+
+    private let log = Logger(subsystem: "kz.adv.meetings", category: "recording")
+    private var recorder: AudioRecorder?
+    private var timer: Timer?
+    private var startDate: Date?
+    private var pausedAccumulated: TimeInterval = 0
+    private var pauseStarted: Date?
+    private var activity: Activity<RecordingActivityAttributes>?
+    private var uploadObserver: Task<Void, Never>?
+    /// Встречи, финализация которых уже идёт (защита от двойного finalize из разных источников)
+    private var finalizing: Set<String> = []
+
+    var isActive: Bool { if case .idle = phase { return false }; if case .finished = phase { return false }; return true }
+
+    func bootstrap() {
+        NotificationCenter.default.addObserver(forName: AVAudioSession.interruptionNotification, object: AVAudioSession.sharedInstance(), queue: .main) { [weak self] n in
+            Task { @MainActor in self?.handleInterruption(n) }
+        }
+        NotificationCenter.default.addObserver(forName: AVAudioSession.mediaServicesWereResetNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in self?.handleMediaReset() }
+        }
+        uploadObserver = Task { [weak self] in
+            for await ev in UploadManager.shared.events {
+                await self?.handleUploadEvent(ev)
+            }
+        }
+        // Незавершённые записи после перезапуска приложения: дозагрузить и финализировать
+        Task { await resumePendingFinalizations() }
+    }
+
+    // MARK: Start / pause / stop
+
+    func start(serverMeeting: MeetingSummary, template: MeetingTemplate) async throws {
+        guard phase == .idle || phase == .finished else { return }
+        try await ensureMicPermission()
+        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template.id, templateTitle: template.title, templateEmoji: template.emoji, startedAt: Date())
+        await LocalStore.shared.upsert(local)
+        meeting = local
+        let dir = await LocalStore.shared.directory(for: local.id)
+
+        let r = AudioRecorder()
+        r.onSegmentClosed = { [weak self] seg in Task { @MainActor in await self?.segmentClosed(seg) } }
+        r.onLevel = { [weak self] l in Task { @MainActor in self?.level = l } }
+        r.onStateChanged = { [weak self] s in Task { @MainActor in self?.recorderStateChanged(s) } }
+        recorder = r
+        try r.start(in: dir)
+
+        startDate = Date()
+        pausedAccumulated = 0
+        elapsed = 0
+        uploadedSegments = 0
+        totalSegments = 0
+        phase = .recording
+        startTimer()
+        startActivity(local)
+        UIApplication.shared.isIdleTimerDisabled = false
+        isPresentingRecorder = true
+    }
+
+    func pause() {
+        guard phase == .recording, let recorder else { return }
+        recorder.pause()
+        pauseStarted = Date()
+        phase = .paused
+        updateActivity()
+    }
+
+    func resume() {
+        guard phase == .paused || phase == .interrupted, let recorder else { return }
+        do {
+            try recorder.resume()
+            if let p = pauseStarted { pausedAccumulated += Date().timeIntervalSince(p) }
+            pauseStarted = nil
+            phase = .recording
+            updateActivity()
+        } catch {
+            log.error("resume failed: \(error.localizedDescription)")
+            phase = .failed("Не удалось продолжить запись: \(error.localizedDescription)")
+        }
+    }
+
+    func addMarker(note: String?) {
+        guard let meeting, isActive else { return }
+        let m = Marker(atSec: elapsed, note: note, createdAt: ISO8601DateFormatter.fractional.string(from: Date()))
+        Task {
+            if let updated = await LocalStore.shared.update(meeting.id, { $0.markers.append(m) }) { self.meeting = updated }
+        }
+    }
+
+    func stop() async {
+        guard let recorder, let meeting, phase != .stopping else { return }
+        phase = .stopping
+        stopTimer()
+        recorder.stop() // синхронно закрывает последний сегмент → segmentClosed
+        self.recorder = nil
+        let updated = await LocalStore.shared.update(meeting.id) { $0.phase = .stopped; $0.endedAt = Date() }
+        self.meeting = updated
+        await endActivity()
+        phase = .uploading
+        await UploadManager.shared.kick()
+        await tryFinalize(meetingId: meeting.id)
+    }
+
+    /// Отмена записи: удаляет встречу на сервере и локальные файлы
+    func discard() async {
+        guard let meeting else { return }
+        recorder?.stop()
+        recorder = nil
+        stopTimer()
+        await endActivity()
+        await LocalStore.shared.remove(meeting.id)
+        try? await APIClient.shared.deleteMeeting(meeting.id)
+        self.meeting = nil
+        phase = .idle
+        isPresentingRecorder = false
+    }
+
+    func reset() {
+        meeting = nil
+        phase = .idle
+        elapsed = 0
+        level = 0
+        finalizedMeetingId = nil
+        isPresentingRecorder = false
+    }
+
+    // MARK: Segments & upload
+
+    private func segmentClosed(_ seg: AudioRecorder.ClosedSegment) async {
+        guard let meeting else { return }
+        let local = LocalSegment(meetingId: meeting.id, seq: seg.seq, fileName: seg.url.lastPathComponent, durationSec: seg.durationSec, sizeBytes: seg.sizeBytes)
+        if let updated = await LocalStore.shared.update(meeting.id, { $0.segments.append(local) }) {
+            self.meeting = updated
+            totalSegments = updated.segments.count
+        }
+        await UploadManager.shared.kick()
+        updateActivity()
+    }
+
+    private func handleUploadEvent(_ ev: UploadManager.Event) async {
+        guard let meeting, ev.meetingId == meeting.id else { return }
+        if let m = await LocalStore.shared.meeting(meeting.id) {
+            self.meeting = m
+            uploadedSegments = m.uploadedCount
+            totalSegments = m.segments.count
+        }
+        updateActivity()
+        if phase == .uploading { await tryFinalize(meetingId: meeting.id) }
+    }
+
+    private func tryFinalize(meetingId: String) async {
+        guard !finalizing.contains(meetingId) else { return }
+        finalizing.insert(meetingId)
+        defer { finalizing.remove(meetingId) }
+        guard let m = await LocalStore.shared.meeting(meetingId), m.phase == .stopped || m.phase == .finalizing else { return }
+        guard m.allUploaded else { return }
+        phase = .finalizing
+        _ = await LocalStore.shared.update(meetingId) { $0.phase = .finalizing }
+        do {
+            let ended = m.endedAt ?? Date()
+            _ = try await APIClient.shared.finalize(meetingId: meetingId, body: FinalizeBody(endedAt: ISO8601DateFormatter.fractional.string(from: ended), durationSec: Int(m.recordedSeconds.rounded()), markers: m.markers))
+            _ = await LocalStore.shared.update(meetingId) { $0.phase = .finalized }
+            if !(m.keepAudio || AudioRetention.current == .manual) {
+                // По умолчанию аудио на устройстве удаляем после успешной постановки в обработку (сервер уже всё получил).
+                if AudioRetention.current == .afterUpload { await LocalStore.shared.deleteAudio(meetingId: meetingId) }
+            }
+            finalizedMeetingId = meetingId
+            phase = .finished
+        } catch {
+            log.error("finalize failed: \(error.localizedDescription)")
+            _ = await LocalStore.shared.update(meetingId) { $0.phase = .stopped; $0.finalizeError = error.localizedDescription }
+            phase = .failed("Не удалось отправить запись на обработку: \(error.localizedDescription)")
+        }
+    }
+
+    /// После перезапуска: записи в фазе stopped/finalizing — дозагрузить и финализировать;
+    /// записи, оборванные крашем в фазе recording — закрыть (есть сегменты) или удалить (пустые).
+    func resumePendingFinalizations() async {
+        for m in await LocalStore.shared.all() where m.phase == .recording {
+            if m.segments.isEmpty {
+                log.warning("незавершённая пустая запись \(m.id) — удаляю")
+                await LocalStore.shared.remove(m.id)
+                try? await APIClient.shared.deleteMeeting(m.id)
+            } else {
+                log.warning("незавершённая запись \(m.id) с \(m.segments.count) сегментами — закрываю")
+                _ = await LocalStore.shared.update(m.id) { $0.phase = .stopped; $0.endedAt = $0.endedAt ?? Date() }
+            }
+        }
+        await UploadManager.shared.kick()
+        for m in await LocalStore.shared.all() where m.phase == .stopped || m.phase == .finalizing {
+            if m.allUploaded {
+                await finalizeDetached(meetingId: m.id)
+            }
+        }
+    }
+
+    /// Импорт готового аудио/видео файла (Zoom, Teams, диктофон): копируем в локальную папку встречи как сегмент 0 и отправляем.
+    func importFile(_ sourceURL: URL, serverMeeting: MeetingSummary, template: MeetingTemplate) async throws {
+        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template.id, templateTitle: template.title, templateEmoji: template.emoji, startedAt: Date(), endedAt: Date(), phase: .stopped)
+        await LocalStore.shared.upsert(local)
+        let dir = await LocalStore.shared.directory(for: local.id)
+        let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension.lowercased()
+        let dest = dir.appending(path: "0000.\(ext)")
+        let accessing = sourceURL.startAccessingSecurityScopedResource()
+        defer { if accessing { sourceURL.stopAccessingSecurityScopedResource() } }
+        try? FileManager.default.removeItem(at: dest)
+        try FileManager.default.copyItem(at: sourceURL, to: dest)
+        let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int) ?? 0
+        let duration = (try? await AVURLAsset(url: dest).load(.duration).seconds) ?? 0
+        let seg = LocalSegment(meetingId: local.id, seq: 0, fileName: dest.lastPathComponent, durationSec: duration.isFinite ? duration : 0, sizeBytes: size)
+        _ = await LocalStore.shared.update(local.id) { $0.segments = [seg] }
+        meeting = await LocalStore.shared.meeting(local.id)
+        phase = .uploading
+        totalSegments = 1
+        uploadedSegments = 0
+        isPresentingRecorder = true
+        await UploadManager.shared.kick()
+    }
+
+    /// Повтор отправки после ошибки (кнопка на экране записи)
+    func retryFinalize() async {
+        guard let id = meeting?.id else { return }
+        phase = .uploading
+        await UploadManager.shared.kick()
+        await tryFinalize(meetingId: id)
+    }
+
+    func finalizeDetached(meetingId: String) async {
+        // Если координатор ведёт эту встречу — финализирует он сам (tryFinalize)
+        if meeting?.id == meetingId, isActive { return }
+        guard !finalizing.contains(meetingId) else { return }
+        finalizing.insert(meetingId)
+        defer { finalizing.remove(meetingId) }
+        guard let m = await LocalStore.shared.meeting(meetingId), m.allUploaded, m.phase == .stopped || m.phase == .finalizing else { return }
+        do {
+            _ = try await APIClient.shared.finalize(meetingId: meetingId, body: FinalizeBody(endedAt: ISO8601DateFormatter.fractional.string(from: m.endedAt ?? Date()), durationSec: Int(m.recordedSeconds.rounded()), markers: m.markers))
+            _ = await LocalStore.shared.update(meetingId) { $0.phase = .finalized }
+            if AudioRetention.current == .afterUpload { await LocalStore.shared.deleteAudio(meetingId: meetingId) }
+        } catch {
+            log.error("detached finalize failed: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: Interruptions
+
+    private func handleInterruption(_ n: Notification) {
+        guard let info = n.userInfo, let typeRaw = info[AVAudioSessionInterruptionTypeKey] as? UInt, let type = AVAudioSession.InterruptionType(rawValue: typeRaw) else { return }
+        switch type {
+        case .began:
+            guard phase == .recording else { return }
+            log.warning("interruption began (звонок / Siri)")
+            recorder?.markInterrupted()
+            pauseStarted = Date()
+            phase = .interrupted
+            updateActivity()
+        case .ended:
+            guard phase == .interrupted else { return }
+            let opts = AVAudioSession.InterruptionOptions(rawValue: (info[AVAudioSessionInterruptionOptionKey] as? UInt) ?? 0)
+            if opts.contains(.shouldResume) {
+                log.info("interruption ended → resume")
+                resume()
+            } else {
+                // Система не рекомендует авто-возобновление — пробуем через секунду, иначе оставляем на паузе
+                Task {
+                    try? await Task.sleep(for: .seconds(1))
+                    if phase == .interrupted { resume() }
+                }
+            }
+        @unknown default: break
+        }
+    }
+
+    private func handleMediaReset() {
+        guard isActive, phase != .stopping else { return }
+        log.error("media services reset — пробуем возобновить")
+        phase = .interrupted
+        resume()
+    }
+
+    private func recorderStateChanged(_ s: AudioRecorder.State) {
+        if s == .interrupted, phase == .recording { phase = .interrupted; pauseStarted = Date(); updateActivity() }
+    }
+
+    // MARK: Timer & activity
+
+    private func startTimer() {
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tick() }
+        }
+    }
+
+    private func stopTimer() { timer?.invalidate(); timer = nil }
+
+    private func tick() {
+        guard let startDate else { return }
+        let pausedNow = pauseStarted.map { Date().timeIntervalSince($0) } ?? 0
+        elapsed = max(0, Date().timeIntervalSince(startDate) - pausedAccumulated - pausedNow)
+    }
+
+    private var timerStart: Date {
+        let pausedNow = pauseStarted.map { Date().timeIntervalSince($0) } ?? 0
+        return Date().addingTimeInterval(-elapsed - pausedNow + pausedNow)
+    }
+
+    private func startActivity(_ m: LocalMeeting) {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let attrs = RecordingActivityAttributes(meetingId: m.id, title: m.title, templateEmoji: m.templateEmoji)
+        let state = RecordingActivityAttributes.ContentState(timerStart: Date(), isPaused: false, pausedElapsed: 0, uploadedSegments: 0, totalSegments: 0)
+        do {
+            activity = try Activity.request(attributes: attrs, content: .init(state: state, staleDate: nil), pushType: nil)
+        } catch {
+            log.error("Live Activity: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateActivity() {
+        guard let activity else { return }
+        let isPaused = phase == .paused || phase == .interrupted
+        let state = RecordingActivityAttributes.ContentState(
+            timerStart: Date().addingTimeInterval(-elapsed),
+            isPaused: isPaused,
+            pausedElapsed: elapsed,
+            uploadedSegments: uploadedSegments,
+            totalSegments: totalSegments
+        )
+        Task { await activity.update(.init(state: state, staleDate: nil)) }
+    }
+
+    private func endActivity() async {
+        guard let activity else { return }
+        let state = RecordingActivityAttributes.ContentState(timerStart: Date().addingTimeInterval(-elapsed), isPaused: true, pausedElapsed: elapsed, uploadedSegments: uploadedSegments, totalSegments: totalSegments)
+        await activity.end(.init(state: state, staleDate: nil), dismissalPolicy: .immediate)
+        self.activity = nil
+    }
+
+    // MARK: Permissions
+
+    private func ensureMicPermission() async throws {
+        let granted: Bool
+        if #available(iOS 17.0, *) {
+            granted = await AVAudioApplication.requestRecordPermission()
+        } else {
+            granted = await withCheckedContinuation { c in AVAudioSession.sharedInstance().requestRecordPermission { c.resume(returning: $0) } }
+        }
+        guard granted else { throw NSError(domain: "Recording", code: 403, userInfo: [NSLocalizedDescriptionKey: "Нет доступа к микрофону. Разрешите его в Настройках → ADV Meetings."]) }
+    }
+}
+
+/// Политика хранения аудио на устройстве
+enum AudioRetention: String, CaseIterable, Identifiable {
+    case afterUpload, week, manual
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .afterUpload: return "Удалять после отправки на обработку"
+        case .week: return "Хранить 7 дней"
+        case .manual: return "Хранить, удалять вручную"
+        }
+    }
+    static var current: AudioRetention {
+        get { AudioRetention(rawValue: UserDefaults.standard.string(forKey: "audioRetention") ?? "") ?? .afterUpload }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "audioRetention") }
+    }
+}
