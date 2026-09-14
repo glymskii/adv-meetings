@@ -24,11 +24,20 @@ function buildSocialProviders() {
     };
   }
   if (cfg.APPLE_CLIENT_ID && cfg.APPLE_TEAM_ID && cfg.APPLE_KEY_ID && cfg.APPLE_PRIVATE_KEY) {
+    // Полная конфигурация (веб-OAuth + нативный вход): Service ID + ключ Sign in with Apple
     providers.apple = async () => ({
       clientId: cfg.APPLE_CLIENT_ID,
       clientSecret: await generateAppleClientSecret(cfg.APPLE_CLIENT_ID!, cfg.APPLE_TEAM_ID!, cfg.APPLE_KEY_ID!, cfg.APPLE_PRIVATE_KEY!),
       appBundleIdentifier: cfg.APPLE_BUNDLE_ID,
     });
+  } else {
+    // Только нативный вход с iPhone: ID-токен проверяется по JWKS Apple, audience = bundle ID приложения.
+    // clientSecret нужен лишь для веб-редиректа, здесь не используется.
+    providers.apple = {
+      clientId: cfg.APPLE_BUNDLE_ID,
+      clientSecret: "native-only",
+      appBundleIdentifier: cfg.APPLE_BUNDLE_ID,
+    };
   }
   return providers;
 }
