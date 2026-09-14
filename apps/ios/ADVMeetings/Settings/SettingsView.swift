@@ -47,12 +47,12 @@ struct SettingsView: View {
                 } footer: {
                     Text("На сервере аудио удаляется сразу после расшифровки — хранятся только транскрипт и отчёт. Локальная копия нужна только для повторной отправки при сбое.")
                 }
-                Section("Локальные записи (\(localMeetings.count))") {
-                    if localMeetings.isEmpty { Text("Нет").foregroundStyle(.secondary) }
+                Section {
+                    if localMeetings.isEmpty { Text("Аудио на устройстве нет").foregroundStyle(.secondary) }
                     ForEach(localMeetings) { m in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(m.title).font(.subheadline)
-                            Text("\(m.phase.rawValue) · сегментов \(m.segments.count), загружено \(m.uploadedCount) · \(Fmt.duration(Int(m.recordedSeconds)))").font(.caption).foregroundStyle(.secondary)
+                            Text("\(m.phase.title) · сегментов \(m.segments.count), загружено \(m.uploadedCount) · \(Fmt.duration(Int(m.recordedSeconds)))").font(.caption).foregroundStyle(.secondary)
                             if let e = m.finalizeError { Text(e).font(.caption2).foregroundStyle(.red) }
                         }
                     }
@@ -60,12 +60,18 @@ struct SettingsView: View {
                     if localMeetings.contains(where: { $0.phase == .stopped }) {
                         Button("Повторить отправку незавершённых") { Task { await RecordingCoordinator.shared.resumePendingFinalizations(); await reload() } }
                     }
+                } header: {
+                    Text("Аудио на устройстве (\(localMeetings.count))")
+                } footer: {
+                    Text("Записи, аудио которых ещё хранится на телефоне. Смахните влево, чтобы удалить.")
                 }
+                #if DEBUG
                 Section {
                     TextField("URL сервера (пусто = по умолчанию)", text: $apiOverride).keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .onSubmit { UserDefaults.standard.set(apiOverride, forKey: AppConfig.overrideKey) }
                     LabeledContent("Текущий", value: AppConfig.apiBaseURL.absoluteString).font(.caption)
-                } header: { Text("Сервер") } footer: { Text("Для разработки. По умолчанию: \(AppConfig.defaultBaseURL.absoluteString)") }
+                } header: { Text("Сервер (отладка)") } footer: { Text("Только в Debug-сборке. По умолчанию: \(AppConfig.defaultBaseURL.absoluteString)") }
+                #endif
                 Section("О приложении") {
                     LabeledContent("Версия", value: (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "")
                     Text("ADV Meetings — запись встреч, расшифровка и контакт-репорты по стандарту холдинга ADV Kazakhstan.").font(.footnote).foregroundStyle(.secondary)
@@ -80,5 +86,5 @@ struct SettingsView: View {
         }
     }
 
-    private func reload() async { localMeetings = await LocalStore.shared.all() }
+    private func reload() async { localMeetings = await LocalStore.shared.withAudioOrPending() }
 }

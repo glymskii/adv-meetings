@@ -49,7 +49,10 @@ final class RecordingCoordinator {
             }
         }
         // Незавершённые записи после перезапуска приложения: дозагрузить и финализировать
-        Task { await resumePendingFinalizations() }
+        Task {
+            await resumePendingFinalizations()
+            if AudioRetention.current == .week { await LocalStore.shared.purgeOlderThan(days: 7) }
+        }
     }
 
     // MARK: Start / pause / stop

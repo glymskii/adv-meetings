@@ -31,7 +31,19 @@ struct LocalMeeting: Codable, Hashable, Identifiable {
     var keepAudio: Bool = false
     var finalizeError: String?
 
-    enum Phase: String, Codable { case recording, stopped, finalizing, finalized }
+    enum Phase: String, Codable {
+        case recording, stopped, finalizing, finalized
+        var title: String {
+            switch self {
+            case .recording: return "Идёт запись"
+            case .stopped: return "Ожидает отправки"
+            case .finalizing: return "Отправляется"
+            case .finalized: return "Отправлено"
+            }
+        }
+    }
+    /// Есть ли ещё аудиофайлы на устройстве
+    var hasAudio: Bool = true
 
     var uploadedCount: Int { segments.filter { $0.uploadState == .uploaded }.count }
     var allUploaded: Bool { !segments.isEmpty && segments.allSatisfy { $0.uploadState == .uploaded } }
@@ -90,10 +102,24 @@ actor LocalStore {
         meetings.values.flatMap { $0.segments }.filter { $0.uploadState == .pending || $0.uploadState == .failed }
     }
 
-    /// Удаляет аудио-файлы встречи (после успешной обработки или по настройке)
+    /// Удаляет аудио-файлы встречи (после успешной обработки или по настройке); запись остаётся с пометкой hasAudio=false
     func deleteAudio(meetingId: String) {
         let dir = recordingsDir.appending(path: meetingId)
         try? FileManager.default.removeItem(at: dir)
+        if var m = meetings[meetingId] { m.hasAudio = false; meetings[meetingId] = m; persist() }
+    }
+
+    /// Записи, у которых аудио ещё на устройстве или отправка не завершена (для экрана настроек)
+    func withAudioOrPending() -> [LocalMeeting] {
+        all().filter { $0.hasAudio || $0.phase == .stopped || $0.phase == .finalizing }
+    }
+
+    /// Удаляет аудио записей, отправленных более N дней назад (политика «Хранить 7 дней»)
+    func purgeOlderThan(days: Int) {
+        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        for m in meetings.values where m.phase == .finalized && (m.endedAt ?? m.startedAt) < cutoff && m.hasAudio {
+            deleteAudio(meetingId: m.id)
+        }
     }
 
     func remove(_ id: String) {
