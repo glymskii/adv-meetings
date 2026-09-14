@@ -144,6 +144,7 @@ export async function notifyMeeting(job: NotifyJob): Promise<void> {
       logger.info({ meetingId: m.id, kind: job.kind }, "APNs не настроен — push пропущен");
       return;
     }
+    logger.info({ meetingId: m.id, kind: job.kind, result: res, env: tokenEnv.get(dev.pushToken) ?? null, token: dev.pushToken.slice(0, 8) }, "Push отправлен");
   }
 }
 
