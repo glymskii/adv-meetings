@@ -75,7 +75,13 @@ export class ElevenLabsStt implements SttProvider {
 
     const form = new FormData();
     form.set("model_id", cfg.ELEVENLABS_MODEL_ID);
-    form.set("source_url", req.sourceUrl);
+    if (req.fileBytes) {
+      form.set("file", new Blob([new Uint8Array(req.fileBytes)], { type: req.contentType ?? "audio/mp4" }), req.fileName ?? "audio.m4a");
+    } else if (req.sourceUrl) {
+      form.set("source_url", req.sourceUrl);
+    } else {
+      throw new SttError("Не передан ни sourceUrl, ни fileBytes", false);
+    }
     form.set("diarize", "true");
     form.set("timestamps_granularity", "word");
     form.set("tag_audio_events", "false");

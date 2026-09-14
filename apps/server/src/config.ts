@@ -37,6 +37,8 @@ const schema = z.object({
   ANTHROPIC_MODEL_DRAFT: z.string().default("claude-sonnet-5"),
   ELEVENLABS_API_KEY: z.string().optional(),
   ELEVENLABS_MODEL_ID: z.string().default("scribe_v2"),
+  /** Как отдавать аудио в STT: url — presigned-ссылка (bucket должен быть доступен из интернета), file — байты через multipart, auto — file для localhost/MinIO */
+  STT_UPLOAD_MODE: z.enum(["auto", "url", "file"]).default("auto"),
 
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default("ADV Meetings <noreply@example.com>"),

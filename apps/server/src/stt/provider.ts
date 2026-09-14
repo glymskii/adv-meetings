@@ -1,8 +1,12 @@
 import type { TranscriptSegment } from "../db/types.js";
 
 export interface TranscribeRequest {
-  /** HTTPS URL аудио (presigned GET) */
-  sourceUrl: string;
+  /** HTTPS URL аудио (presigned GET); используется, если не передан fileBytes */
+  sourceUrl?: string;
+  /** Байты аудио для прямой загрузки (multipart) */
+  fileBytes?: Buffer;
+  fileName?: string;
+  contentType?: string;
   /** Подсказка по числу спикеров (1–32) */
   numSpeakers?: number | null;
   /** ISO-639-1: ru | kk | en. null = автоопределение */

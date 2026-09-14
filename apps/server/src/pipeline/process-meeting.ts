@@ -11,6 +11,15 @@ import { renderMarkdown } from "../export/markdown.js";
 import { concatToM4a, probeDuration, withTempDir, writeTemp } from "./audio.js";
 import { agencies } from "../db/schema/index.js";
 import type { ProcessMeetingJob } from "../queue/boss.js";
+import { config } from "../config.js";
+
+/** url — ElevenLabs скачивает по presigned-ссылке; file — байты через multipart (localhost/MinIO недоступны извне). */
+function sttUploadMode(): "url" | "file" {
+  const cfg = config();
+  if (cfg.STT_UPLOAD_MODE !== "auto") return cfg.STT_UPLOAD_MODE;
+  const host = new URL(cfg.S3_PUBLIC_ENDPOINT ?? cfg.S3_ENDPOINT).hostname;
+  return /^(localhost|127\.0\.0\.1|minio|.*\.local)$/.test(host) ? "file" : "url";
+}
 import { enqueueNotify } from "../queue/boss.js";
 
 type Meeting = typeof meetings.$inferSelect;
@@ -102,11 +111,16 @@ async function transcribeStep(meeting: Meeting, mergedKey: string) {
     if (typeof v === "string" && v.length < 50 && v.split(/\s+/).length <= 5) keyterms.push(v);
   }
 
-  const sourceUrl = await presignGet(mergedKey, 2 * 60 * 60);
+  const useFile = sttUploadMode() === "file";
+  const sourceUrl = useFile ? undefined : await presignGet(mergedKey, 2 * 60 * 60);
+  const fileBytes = useFile ? await getObjectBytes(mergedKey) : undefined;
   let result;
   try {
     result = await sttProvider().transcribe({
       sourceUrl,
+      fileBytes,
+      fileName: "merged.m4a",
+      contentType: "audio/mp4",
       numSpeakers: meeting.numSpeakersHint,
       language: meeting.languageHint,
       keyterms,
