@@ -16,7 +16,8 @@
     "db:migrate": "tsx --env-file-if-exists=.env src/db/migrate.ts",
     "db:seed": "tsx --env-file-if-exists=.env src/db/seed.ts",
     "e2e:pipeline": "tsx --env-file-if-exists=.env scripts/e2e-pipeline.ts",
-    "dev:bucket": "tsx --env-file-if-exists=.env scripts/dev-bucket.ts"
+    "dev:bucket": "tsx --env-file-if-exists=.env scripts/dev-bucket.ts",
+    "env:railway": "bash scripts/railway-sync-keys.sh"
   },
   "dependencies": {
     "@adv/shared": "workspace:*",
