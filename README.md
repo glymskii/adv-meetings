@@ -1,17 +1,51 @@
 # ADV Meetings
 
-Мобильное приложение для ADV Kazakhstan: запись встречи → транскрибация (ElevenLabs Scribe v2, диаризация) → контакт-репорт по шаблону из «ADV Contact Report Router 2026» (Claude). Аналог Plaud AI Note.
+iOS-приложение для холдинга ADV Kazakhstan: запись встречи на телефон → транскрибация с разделением спикеров (ElevenLabs Scribe v2) → контакт-репорт по шаблону типа встречи (Claude) → задачи, экспорт, шаринг. Аналог Plaud AI Note, заточенный под регламент контакт-репортов ADV.
+
+Аудио живёт на сервере только на время обработки и удаляется сразу после расшифровки. Хранятся транскрипт, отчёт и задачи.
+
+## Что умеет
+
+**Запись.** Выбор типа встречи (внутренняя / с клиентом / с вендором → 12 подтипов по маршрутизатору контакт-репортов ADV), форма контекста перед записью, запись в фоне и при заблокированном экране (сегменты по 5 минут, AAC 16 кГц), Live Activity с кнопками пауза/стоп на экране блокировки и в Dynamic Island, отметки важных моментов, обработка звонков, фоновая загрузка сегментов, восстановление после сбоя, импорт готовых аудио/видео файлов.
+
+**Отчёт.** Структура и правила из шаблона ADV, разделы, action plan с ответственными и сроками, решения, открытые вопросы, блок «не озвучено, уточнить», внутренние блоки «не для клиента». Ручное редактирование текста перед экспортом. ИИ-правка по текстовым инструкциям («Спикер 2 — это Данияр», «убери пункт про наружку») с подсказками из контекста записи и историей версий. Пересборка по другому шаблону, быстрый черновик на Sonnet. Экспорт DOCX / PDF / Markdown / TXT через share sheet.
+
+**Транскрипт.** Быстрый фильтр по спикерам, «Это я» (имя владельца аккаунта), роли коллега / клиент / вендор с отдельной нумерацией «Клиент 1, Клиент 2», имя вручную, из аккаунтов холдинга или из справочника ответственных.
+
+**Задачи.** Отдельная вкладка со всеми action items по всем встречам: группы по срокам, фильтры, поиск, чек-лист, редактор (текст, ответственный, срок), ручные задачи, push-напоминания о дедлайнах. Общий справочник ответственных холдинга: автоматически из отчётов, вручную или из аккаунтов; доступен со всех устройств.
+
+**Настройки сроков** (общие для холдинга): срок по умолчанию для задач без дедлайна (по рабочим дням), напоминания, SLA отправки отчёта после встречи (внутренние 24 ч, внешние 48 ч).
+
+**Доступ.** Вход по одноразовому коду на почту или через Sign in with Apple, allowlist корпоративных доменов, шаринг встречи с коллегой из аккаунтов холдинга (отчёт или отчёт + транскрипт), роли agency_admin / holding_admin, конфиденциальные встречи (HR, совещания руководства).
 
 ## Структура
 
 ```
-apps/server/      Node 22 + TypeScript: API (Hono) и воркер пайплайна (pg-boss, ffmpeg)
-apps/ios/         iOS-приложение (SwiftUI, iOS 17+) — первый этап
-packages/shared/  templates.json — 12 шаблонов контакт-репортов ADV (курируемые), templates.raw.json — дамп Excel
+apps/server/      Node 22 + TypeScript: API (Hono, Better Auth, Drizzle) и воркер пайплайна (pg-boss, ffmpeg)
+apps/ios/         iOS-приложение (Swift, SwiftUI, iOS 17+), проект генерируется xcodegen
+packages/shared/  templates.json — 12 курируемых шаблонов контакт-репортов ADV
 infra/            docker-compose (Postgres + MinIO) для локальной разработки
-docs/             PLAN.md — план проекта; source/ — исходные Excel заказчика
-scripts/          extract-templates.ts — извлечение сырых шаблонов из Excel
+docs/             PLAN.md — план и статус проекта
+scripts/          extract-templates.ts — извлечение сырых шаблонов из Excel заказчика
 ```
+
+Исходные Excel-документы заказчика (`docs/source/`) и их сырой дамп в репозиторий не входят.
+
+## Архитектура
+
+```
+iPhone ──segments (presigned PUT)──▶ Railway Bucket (временное аудио)
+   │                                        │
+   └──POST /finalize──▶ API (Hono) ──job──▶ Worker: ffmpeg concat → ElevenLabs Scribe v2
+                          │                          → удаление аудио → Claude (structured output)
+                          │                          → отчёт + задачи → APNs push
+                          └──SSE /events──▶ iPhone (статус обработки)
+```
+
+- **STT**: ElevenLabs Scribe v2, диаризация, keyterms из контекста встречи и справочника агентства. Провайдер за интерфейсом `SttProvider` (второй адаптер можно добавить без изменений пайплайна).
+- **LLM**: Claude (`claude-opus-5`, черновики на `claude-sonnet-5`), structured outputs по zod-схеме отчёта, кеширование системного промпта, дедлайны датами, роли спикеров и владелец записи в промпте, режим правки с предыдущей версией отчёта.
+- **Очередь**: pg-boss поверх Postgres; ретраи, dead-letter, cron (подчистка аудио старше 48 ч, перепостановка зависших встреч, напоминания о дедлайнах).
+- **Auth**: Better Auth (email OTP, Sign in with Apple по ID-токену, bearer-токены для мобильного клиента).
 
 ## Локальный запуск сервера
 
@@ -25,40 +59,19 @@ pnpm dev                                                 # API на :3000
 pnpm worker                                              # воркер пайплайна
 ```
 
-Проверка: `curl localhost:3000/health`, OpenAPI — `localhost:3000/api/openapi.json`.
+Проверка: `curl localhost:3000/health`, OpenAPI — `localhost:3000/api/openapi.json`. Без `RESEND_API_KEY` коды входа печатаются в лог API. `FAKE_PROVIDERS=true` подменяет ElevenLabs и Anthropic заглушками — пайплайн проходит целиком без ключей. С локальным MinIO аудио отправляется в ElevenLabs байтами (`STT_UPLOAD_MODE=auto`), в проде — по presigned-ссылке.
 
-Без ключей `RESEND_API_KEY` одноразовые коды входа печатаются в лог API. `FAKE_PROVIDERS=true` подменяет ElevenLabs/Anthropic заглушками — пайплайн (склейка ffmpeg → «транскрипт» → удаление аудио → «отчёт» → экспорт) проходит целиком.
-
-## Пайплайн
-
-1. Приложение создаёт встречу (`POST /api/meetings`, выбранный шаблон + контекст), пишет аудио сегментами по 5 минут и заливает их по presigned URL (`POST /api/meetings/:id/segments` → PUT → `…/complete`).
-2. `POST /api/meetings/:id/finalize` ставит job в очередь `meeting.process`.
-3. Воркер: склейка сегментов (ffmpeg, AAC 16 кГц mono) → ElevenLabs Scribe v2 (`source_url`, diarize, keyterms) → **удаление аудио из bucket** → Claude (`claude-opus-5`, structured output по структуре шаблона) → отчёт (JSON + markdown) → push.
-4. Прогресс: `GET /api/meetings/:id/events` (SSE). Экспорт: `GET /api/meetings/:id/export?format=docx|pdf|md|txt`.
-
-API задач и справочников: `GET /api/tasks`, `PATCH/DELETE /api/tasks/:id`, `GET/POST /api/meetings/:id/tasks`, `/api/people`, `GET /api/users`, `/api/settings/deadlines`.
-
-Cron в воркере: `audio.sweep` (удаляет аудио старше `AUDIO_RETENTION_HOURS`), `meetings.stuck` (перепоставляет зависшие).
-
-## Деплой (Railway)
-
-Проект `adv-meetings`: Postgres, bucket `audio-temp` (ams), сервисы `api` и `worker` из одного образа `apps/server/Dockerfile` (контекст — корень репозитория). `api` при старте применяет миграции и сид шаблонов.
+Сквозной прогон на реальном аудио без телефона:
 
 ```bash
-railway up --service api --detach -m "…"
-railway up --service worker --detach -m "…"
+pnpm --filter @adv/server e2e:pipeline -- путь/к/записи.m4a client_brief auto 4
 ```
 
-Переменные окружения — см. `apps/server/.env.example`. Ключи `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `RESEND_API_KEY` задаются в Railway:
+Проверка только LLM-шага на тестовом транскрипте:
 
 ```bash
-railway variable set ANTHROPIC_API_KEY=sk-ant-… ELEVENLABS_API_KEY=… RESEND_API_KEY=re_… --service api
-railway variable set ANTHROPIC_API_KEY=sk-ant-… ELEVENLABS_API_KEY=… RESEND_API_KEY=re_… --service worker
+pnpm --filter @adv/server exec tsx --env-file=.env scripts/e2e-summarize.ts client_brief high
 ```
-
-Пока `RESEND_API_KEY` пуст, одноразовые коды входа видны в логах `api` (`railway logs --service api`).
-
-Сквозной прогон на реальном аудио без мобилки: `pnpm --filter @adv/server e2e:pipeline -- путь/к/записи.m4a client_brief auto 4`.
 
 ## iOS-приложение
 
@@ -67,17 +80,49 @@ cd apps/ios && xcodegen generate      # ADVMeetings.xcodeproj не хранит�
 open ADVMeetings.xcodeproj
 ```
 
-Debug-сборка ходит на `http://localhost:3000` (симулятор видит localhost Mac), Release — на Railway (`API_BASE_URL` в `project.yml`). URL можно переопределить в Настройках приложения. Bundle ID `kz.adv.meetings`, команда JWL983DY46, iOS 17+.
+Debug-сборка ходит на `http://localhost:3000` (симулятор видит localhost Mac), Release — на Railway (`API_BASE_URL` в `project.yml`). URL можно переопределить в Настройках приложения. Bundle ID `kz.adv.meetings`, iOS 17+. Запись в симуляторе требует доступа Simulator к микрофону macOS; фоновая запись при блокировке, звонки, push и Live Activity проверяются на реальном устройстве.
 
-Что реализовано: вход по одноразовому коду на почту (+ Sign in with Apple), выбор типа встречи (3 группы → 12 подтипов, недавние), форма контекста, запись в фоне и при блокировке экрана (AVAudioEngine, сегменты по 5 минут, AAC 16 кГц mono), Live Activity с кнопками пауза/стоп, отметки во время записи, фоновая загрузка сегментов, восстановление после краша, импорт аудио/видео файлов, экран обработки (SSE), отчёт по разделам с чек-листом action items, транскрипт с переименованием спикеров, пересборка отчёта по другому шаблону, экспорт DOCX/PDF/MD/TXT через share sheet, доступ коллегам по email, настройки хранения аудио.
+Сборка на устройство без входа в Xcode-аккаунт (подписание через App Store Connect API key):
 
-Дополнительно: вкладка «Задачи» (все action items по всем встречам, группировка по срокам, фильтр по ответственному, чек-лист, редактор), общий справочник ответственных (автоматически из отчётов + вручную, доступен со всех устройств, включает аккаунты холдинга), настройки сроков (срок по умолчанию по рабочим дням, напоминания push, SLA отправки отчёта), спикеры в транскрипте: быстрый фильтр, «Это я» (имя владельца аккаунта), роли коллега/клиент/вендор с нумерацией «Клиент 1, Клиент 2», имя вручную или из аккаунтов холдинга; шаринг с выбором коллеги из аккаунтов.
+```bash
+xcodebuild -project ADVMeetings.xcodeproj -scheme ADVMeetings -configuration Debug \
+  -destination "platform=iOS,id=<UDID>" -allowProvisioningUpdates \
+  -authenticationKeyPath <AuthKey.p8> -authenticationKeyID <KEY_ID> -authenticationKeyIssuerID <ISSUER_ID> \
+  API_BASE_URL=https://<api-domain> build
+```
 
-Проверка фоновой записи при заблокированном экране, прерываний звонком и AirPods — только на реальном устройстве (чек-лист в docs/PLAN.md).
+## Деплой (Railway)
+
+Проект `adv-meetings`: Postgres, bucket `audio-temp`, сервисы `api` и `worker` из одного образа `apps/server/Dockerfile` (контекст сборки — корень репозитория). `api` при старте применяет миграции и сид шаблонов.
+
+```bash
+railway up --service api --detach -m "…"
+railway up --service worker --detach -m "…"
+```
+
+Переменные окружения — `apps/server/.env.example`. Ключи (`ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `RESEND_API_KEY`, APNs `.p8`) переносятся из локального `.env` в оба сервиса одной командой:
+
+```bash
+pnpm --filter @adv/server env:railway
+```
+
+Ключ ElevenLabs должен иметь разрешение Speech to Text. Ключ APNs — из Apple Developer → Keys с включённым APNs (Sandbox & Production); проверка: `scripts/apns-check.ts`.
+
+## API (основное)
+
+- `POST /api/auth/email-otp/send-verification-otp`, `POST /api/auth/sign-in/email-otp`, `POST /api/auth/sign-in/social` (Apple, ID-токен), `POST /api/auth/update-user`.
+- `GET /api/templates`, `GET /api/me`, `POST /api/me/devices`, `GET /api/users`.
+- `POST /api/meetings`, `GET /api/meetings`, `GET/PATCH/DELETE /api/meetings/:id`, `POST /api/meetings/:id/segments` → presigned PUT, `POST …/segments/:seq/complete`, `POST /api/meetings/:id/finalize`, `POST …/retry`, `GET …/events` (SSE).
+- `PATCH /api/meetings/:id/speakers` (имена, роли, владелец), `POST /api/meetings/:id/reports` (пересборка / ИИ-правка с `instructions`), `PATCH /api/meetings/:id/reports/:reportId` (ручная правка текста), `GET …/export?format=docx|pdf|md|txt`, `GET/POST/DELETE …/shares`.
+- `GET /api/tasks`, `PATCH/DELETE /api/tasks/:id`, `GET/POST /api/meetings/:id/tasks`, `GET/POST/PATCH/DELETE /api/people`, `GET/PUT /api/settings/deadlines`.
 
 ## Тесты
 
 ```bash
-pnpm --filter @adv/server test        # vitest: сегментация STT, рендер отчётов, промпт
+pnpm --filter @adv/server test        # vitest: сегментация STT, рендер отчётов, промпт, сроки задач
 pnpm --filter @adv/server typecheck
 ```
+
+## Стоимость
+
+Часовая встреча ≈ $0.65–0.80: ElevenLabs $0.22 + Claude Opus 5 ≈ $0.45–0.60 (в режиме черновика на Sonnet 5 ≈ $0.45 за встречу). Обработка часовой записи занимает 3–5 минут.
