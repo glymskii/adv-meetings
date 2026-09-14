@@ -137,6 +137,8 @@ export const TranscriptSchema = z
     languageCode: z.string().nullable(),
     segments: z.array(TranscriptSegmentSchema),
     speakers: z.record(z.string(), z.string()),
+    selfSpeakerId: z.string().nullable(),
+    speakerRoles: z.record(z.string(), z.enum(["ours", "client", "vendor"])),
     speakerIds: z.array(z.string()),
     audioDurationSec: z.number().nullable(),
     wordCount: z.number().int(),
@@ -221,7 +223,15 @@ export const FinalizeBody = z
   .object({ endedAt: z.string().datetime({ offset: true }).optional(), durationSec: z.number().int().min(0).optional(), markers: z.array(MarkerSchema).optional() })
   .openapi("FinalizeBody");
 
-export const SpeakersBody = z.object({ speakers: z.record(z.string(), z.string().max(80)) }).openapi("SpeakersBody");
+export const SpeakersBody = z
+  .object({
+    speakers: z.record(z.string(), z.string().max(80)),
+    /** speaker_N — владелец записи (текущий пользователь); null — снять отметку */
+    selfSpeakerId: z.string().max(40).nullable().optional(),
+    /** Роли спикеров: ours / client / vendor (отсутствие ключа = не задана) */
+    speakerRoles: z.record(z.string(), z.enum(["ours", "client", "vendor"])).optional(),
+  })
+  .openapi("SpeakersBody");
 
 export const RegenerateBody = z
   .object({ templateId: z.string().uuid().optional(), effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), draft: z.boolean().optional() })
@@ -249,6 +259,10 @@ export const MeSchema = z
   .openapi("Me");
 
 export const ActionItemsBody = z.object({ actionItems: z.array(ActionItemSchema) }).openapi("ActionItemsBody");
+
+export const AccountUserSchema = z
+  .object({ id: z.string(), name: z.string(), email: z.string(), agencyId: z.string().nullable(), agencyName: z.string().nullable() })
+  .openapi("AccountUser");
 
 export const StatusEventSchema = z.object({ status: MeetingStatus, statusDetail: z.string().nullable(), error: z.string().nullable(), updatedAt: z.string() }).openapi("StatusEvent");
 

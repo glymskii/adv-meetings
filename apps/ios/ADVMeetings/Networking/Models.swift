@@ -187,6 +187,7 @@ struct Transcript: Codable, Hashable {
     let languageCode: String?
     let segments: [TranscriptSegment]
     let speakers: [String: String]
+    let selfSpeakerId: String?
     let speakerIds: [String]
     let audioDurationSec: Double?
     let wordCount: Int
@@ -270,6 +271,9 @@ struct ReportVersion: Codable, Hashable, Identifiable {
 }
 
 struct MeetingDetail: Codable, Hashable, Identifiable {
+    let tasks: [TaskItem]
+    let reportDueAt: Date
+    let reportSlaHours: Int
     let id: String
     let title: String
     let status: MeetingStatus
@@ -304,6 +308,125 @@ struct MeetingDetail: Codable, Hashable, Identifiable {
     var summary: MeetingSummary {
         MeetingSummary(id: id, title: title, status: status, statusDetail: statusDetail, error: error, templateId: templateId, templateCode: templateCode, templateTitle: templateTitle, templateEmoji: templateEmoji, group: group, source: source, confidentiality: confidentiality, startedAt: startedAt, endedAt: endedAt, durationSec: durationSec, segmentCount: segmentCount, hasTranscript: hasTranscript, hasReport: hasReport, isOwner: isOwner, createdAt: createdAt, updatedAt: updatedAt)
     }
+
+    func with(tasks: [TaskItem]) -> MeetingDetail {
+        MeetingDetail(tasks: tasks, reportDueAt: reportDueAt, reportSlaHours: reportSlaHours, id: id, title: title, status: status, statusDetail: statusDetail, error: error, templateId: templateId, templateCode: templateCode, templateTitle: templateTitle, templateEmoji: templateEmoji, group: group, source: source, confidentiality: confidentiality, startedAt: startedAt, endedAt: endedAt, durationSec: durationSec, segmentCount: segmentCount, hasTranscript: hasTranscript, hasReport: hasReport, isOwner: isOwner, createdAt: createdAt, updatedAt: updatedAt, contextFields: contextFields, participantsHint: participantsHint, numSpeakersHint: numSpeakersHint, languageHint: languageHint, platform: platform, markers: markers, transcript: transcript, report: report, reportVersions: reportVersions)
+    }
+}
+
+// MARK: - Задачи / люди / настройки сроков
+
+enum TaskStatus: String, Codable { case open, done }
+
+struct TaskItem: Codable, Hashable, Identifiable {
+    let id: String
+    let meetingId: String
+    let meetingTitle: String
+    let meetingEmoji: String
+    let meetingStartedAt: Date
+    var task: String
+    var assigneeName: String?
+    var assigneePersonId: String?
+    var deadlineText: String?
+    var deadlineDate: String?
+    var deadlineIsDefault: Bool
+    let quote: String?
+    var status: TaskStatus
+    let doneAt: Date?
+    let source: String
+    let isOwner: Bool
+    let createdAt: Date
+
+    var isDone: Bool { status == .done }
+    var deadline: Date? { deadlineDate.flatMap { DateOnly.parse($0) } }
+    var isOverdue: Bool { !isDone && (deadline.map { $0 < DateOnly.startOfToday } ?? false) }
+}
+
+struct TaskPatch: Encodable {
+    var task: String?
+    var status: TaskStatus?
+    var assigneePersonId: String??
+    var assigneeName: String??
+    var deadlineDate: String??
+    var deadlineText: String??
+
+    enum CodingKeys: String, CodingKey { case task, status, assigneePersonId, assigneeName, deadlineDate, deadlineText }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        if let task { try c.encode(task, forKey: .task) }
+        if let status { try c.encode(status, forKey: .status) }
+        if let v = assigneePersonId { try c.encode(v, forKey: .assigneePersonId) }
+        if let v = assigneeName { try c.encode(v, forKey: .assigneeName) }
+        if let v = deadlineDate { try c.encode(v, forKey: .deadlineDate) }
+        if let v = deadlineText { try c.encode(v, forKey: .deadlineText) }
+    }
+}
+
+struct TaskCreate: Encodable {
+    var task: String
+    var assigneePersonId: String?
+    var assigneeName: String?
+    var deadlineDate: String?
+}
+
+struct TasksPage: Decodable {
+    let items: [TaskItem]
+    let openCount: Int
+    let overdueCount: Int
+}
+
+struct Person: Codable, Hashable, Identifiable {
+    let id: String
+    var name: String
+    var role: String?
+    var company: String?
+    var email: String?
+    let agencyId: String?
+    let source: String
+    var isActive: Bool
+    let openTasks: Int?
+
+    var subtitle: String { [role, company].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ") }
+}
+
+struct PersonBody: Encodable {
+    var name: String
+    var role: String?
+    var company: String?
+    var email: String?
+    var isActive: Bool?
+}
+
+struct DeadlineSettings: Codable, Hashable {
+    var defaultTaskDeadlineDays: Int
+    var workingDaysOnly: Bool
+    var remindDaysBefore: Int
+    var remindHourLocal: Int
+    var reportSlaInternalHours: Int
+    var reportSlaExternalHours: Int
+}
+
+/// Работа с датами вида YYYY-MM-DD (сроки задач) в календаре пользователя
+enum DateOnly {
+    static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.calendar = Calendar(identifier: .gregorian)
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = .current
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    static func parse(_ s: String) -> Date? { formatter.date(from: s) }
+    static func string(_ d: Date) -> String { formatter.string(from: d) }
+    static var startOfToday: Date { Calendar.current.startOfDay(for: Date()) }
+    static let display: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "ru_RU")
+        f.dateFormat = "d MMM yyyy"
+        return f
+    }()
+    static func display(_ s: String?) -> String? { s.flatMap(parse).map { display.string(from: $0) } }
 }
 
 struct CreateMeetingBody: Encodable {
@@ -358,7 +481,15 @@ struct FinalizeBody: Encodable {
     var markers: [Marker]?
 }
 
-struct SpeakersBody: Encodable { let speakers: [String: String] }
+struct SpeakersBody: Encodable { let speakers: [String: String]; var selfSpeakerId: String?? = nil
+    enum CodingKeys: String, CodingKey { case speakers, selfSpeakerId }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(speakers, forKey: .speakers)
+        if let v = selfSpeakerId { try c.encode(v, forKey: .selfSpeakerId) }
+    }
+}
+struct UpdateUserBody: Encodable { let name: String }
 struct RegenerateBody: Encodable { var templateId: String?; var effort: String?; var draft: Bool? }
 struct ActionItemsBody: Encodable { let actionItems: [ActionItem] }
 struct ShareBody: Encodable { let email: String; var scope: String = "report" }

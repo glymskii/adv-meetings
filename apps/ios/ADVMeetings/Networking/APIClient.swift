@@ -150,7 +150,8 @@ extension APIClient {
     }
     func finalize(meetingId: String, body: FinalizeBody) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/finalize", body: body) }
     func retry(meetingId: String) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/retry", body: EmptyBody()) }
-    func renameSpeakers(meetingId: String, speakers: [String: String]) async throws -> MeetingDetail { try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers)) }
+    func renameSpeakers(meetingId: String, speakers: [String: String], selfSpeakerId: String?? = nil) async throws -> MeetingDetail { try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers, selfSpeakerId: selfSpeakerId)) }
+    func updateUserName(_ name: String) async throws { try await raw("POST", "/api/auth/update-user", body: UpdateUserBody(name: name)) }
     func regenerate(meetingId: String, body: RegenerateBody) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/reports", body: body) }
     func updateActionItems(meetingId: String, reportId: String, items: [ActionItem]) async throws -> Report {
         try await request("PATCH", "/api/meetings/\(meetingId)/reports/\(reportId)/action-items", body: ActionItemsBody(actionItems: items))
@@ -161,6 +162,32 @@ extension APIClient {
     func shares(meetingId: String) async throws -> [Share] { try await request("GET", "/api/meetings/\(meetingId)/shares") }
     func share(meetingId: String, email: String, scope: String) async throws -> Share { try await request("POST", "/api/meetings/\(meetingId)/shares", body: ShareBody(email: email, scope: scope)) }
     func unshare(meetingId: String, shareId: String) async throws { try await raw("DELETE", "/api/meetings/\(meetingId)/shares/\(shareId)") }
+
+    // Задачи
+    func tasks(status: String = "open", assignee: String? = nil, meetingId: String? = nil, query: String? = nil) async throws -> TasksPage {
+        var q = [URLQueryItem(name: "status", value: status), URLQueryItem(name: "limit", value: "500")]
+        if let assignee { q.append(URLQueryItem(name: "assignee", value: assignee)) }
+        if let meetingId { q.append(URLQueryItem(name: "meetingId", value: meetingId)) }
+        if let query, !query.isEmpty { q.append(URLQueryItem(name: "q", value: query)) }
+        return try await request("GET", "/api/tasks", query: q)
+    }
+    func updateTask(_ id: String, _ patch: TaskPatch) async throws -> TaskItem { try await request("PATCH", "/api/tasks/\(id)", body: patch) }
+    func deleteTask(_ id: String) async throws { try await raw("DELETE", "/api/tasks/\(id)") }
+    func createTask(meetingId: String, _ body: TaskCreate) async throws -> TaskItem { try await request("POST", "/api/meetings/\(meetingId)/tasks", body: body) }
+
+    // Люди
+    func people(query: String? = nil, includeInactive: Bool = false) async throws -> [Person] {
+        var q: [URLQueryItem] = [URLQueryItem(name: "includeInactive", value: includeInactive ? "1" : "0")]
+        if let query, !query.isEmpty { q.append(URLQueryItem(name: "q", value: query)) }
+        return try await request("GET", "/api/people", query: q)
+    }
+    func createPerson(_ body: PersonBody) async throws -> Person { try await request("POST", "/api/people", body: body) }
+    func updatePerson(_ id: String, _ body: PersonBody) async throws -> Person { try await request("PATCH", "/api/people/\(id)", body: body) }
+    func deletePerson(_ id: String) async throws { try await raw("DELETE", "/api/people/\(id)") }
+
+    // Настройки сроков
+    func deadlineSettings() async throws -> DeadlineSettings { try await request("GET", "/api/settings/deadlines") }
+    func saveDeadlineSettings(_ s: DeadlineSettings) async throws -> DeadlineSettings { try await request("PUT", "/api/settings/deadlines", body: s) }
 
     /// SSE-поток статуса: возвращает события до done/failed
     func statusEvents(meetingId: String) -> AsyncThrowingStream<StatusEvent, Error> {

@@ -55,6 +55,8 @@ const transcript = {
   fullText: stt.fullText,
   segments: stt.segments,
   speakers: { speaker_0: "Айгерим" },
+  selfSpeakerId: "speaker_0",
+  speakerRoles: { speaker_0: "ours" as const, speaker_1: "client" as const },
   audioDurationSec: "36",
   wordCount: stt.wordCount,
   costUsd: "0",

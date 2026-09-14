@@ -1,0 +1,1 @@
+ALTER TABLE "transcripts" ADD COLUMN "self_speaker_id" text;

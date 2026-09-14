@@ -7,7 +7,7 @@ import { config } from "../config.js";
 import { logger } from "../logger.js";
 import type { AppEnv } from "./middleware/auth.js";
 import { meetingsRoutes } from "./routes/meetings.js";
-import { meRoutes } from "./routes/me.js";
+import { meRoutes, usersRoutes } from "./routes/me.js";
 import { templatesRoutes } from "./routes/templates.js";
 import { meetingTasksRoutes, tasksRoutes } from "./routes/tasks.js";
 import { peopleRoutes } from "./routes/people.js";
@@ -45,6 +45,7 @@ export function createApp() {
   app.route("/api/people", peopleRoutes);
   app.route("/api/settings", settingsRoutes);
   app.route("/api/me", meRoutes);
+  app.route("/api/users", usersRoutes);
 
   app.doc("/api/openapi.json", {
     openapi: "3.1.0",

@@ -35,6 +35,11 @@ final class AuthService {
         await refreshMe()
     }
 
+    func updateName(_ name: String) async throws {
+        try await api.updateUserName(name.trimmingCharacters(in: .whitespaces))
+        await refreshMe()
+    }
+
     func refreshMe() async {
         do { me = try await api.me() } catch { lastError = error.localizedDescription }
     }

@@ -23,6 +23,7 @@ import type {
   Participant,
   ReportSection,
   SpeakerMap,
+  SpeakerRoleMap,
   TemplateField,
   TemplateSection,
   TranscriptSegment,
@@ -173,6 +174,10 @@ export const transcripts = pgTable(
     fullText: text("full_text").notNull(),
     segments: jsonb("segments").$type<TranscriptSegment[]>().notNull().default([]),
     speakers: jsonb("speakers").$type<SpeakerMap>().notNull().default({}),
+    /** speaker_N, который является владельцем записи (пользователем приложения) */
+    selfSpeakerId: text("self_speaker_id"),
+    /** роли спикеров: ours / client / vendor — для нумерации «Клиент 1, Клиент 2» и для отчёта */
+    speakerRoles: jsonb("speaker_roles").$type<SpeakerRoleMap>().notNull().default({}),
     audioDurationSec: numeric("audio_duration_sec", { precision: 10, scale: 3 }),
     wordCount: integer("word_count").notNull().default(0),
     costUsd: numeric("cost_usd", { precision: 10, scale: 4 }),

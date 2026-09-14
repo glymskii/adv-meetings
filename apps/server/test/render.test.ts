@@ -104,3 +104,16 @@ describe("buildSystemPrompt", () => {
     expect(b.stable).toBe(a.stable);
   });
 });
+
+import { speakerLabel } from "../src/llm/prompt.js";
+describe("speakerLabel", () => {
+  it("нумерует клиентов и вендоров отдельно", () => {
+    const roles = { speaker_0: "ours" as const, speaker_1: "client" as const, speaker_3: "client" as const, speaker_2: "vendor" as const };
+    expect(speakerLabel("speaker_0", {}, roles)).toBe("Спикер 1");
+    expect(speakerLabel("speaker_1", {}, roles)).toBe("Клиент 1");
+    expect(speakerLabel("speaker_3", {}, roles)).toBe("Клиент 2");
+    expect(speakerLabel("speaker_2", {}, roles)).toBe("Вендор 1");
+    expect(speakerLabel("speaker_1", { speaker_1: "Данияр" }, roles)).toBe("Данияр");
+    expect(speakerLabel("speaker_5", {}, {})).toBe("Спикер 6");
+  });
+});

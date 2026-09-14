@@ -15,6 +15,8 @@ struct MeetingDetailView: View {
     @State private var showShare = false
     @State private var confirmDelete = false
     @State private var busy = false
+    @State private var editingTask: TaskItem?
+    @State private var addingTask = false
 
     enum Tab: String, CaseIterable { case report = "Отчёт", transcript = "Транскрипт", info = "Инфо" }
 
@@ -36,6 +38,8 @@ struct MeetingDetailView: View {
         .sheet(item: $exportURL) { url in ShareSheet(items: [url]) }
         .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d) { watchGeneration += 1 } } }
         .sheet(isPresented: $showShare) { if let d = detail { SharesSheet(meetingId: d.id) } }
+        .sheet(item: $editingTask) { t in TaskEditorView(task: t) { _ in await load() } }
+        .sheet(isPresented: $addingTask) { NewTaskView(meetingId: meetingId) { _ in await load() } }
         .confirmationDialog("Удалить встречу вместе с транскриптом и отчётом?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Удалить", role: .destructive) { Task { try? await APIClient.shared.deleteMeeting(meetingId); await LocalStore.shared.remove(meetingId); dismiss() } }
         }
@@ -55,7 +59,9 @@ struct MeetingDetailView: View {
             }
             switch tab {
             case .report:
-                if let r = d.report { ReportView(report: r, meeting: d) { items in await updateActionItems(items) } }
+                if let r = d.report {
+                    ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true })
+                }
                 else if !d.status.isInProgress { ContentUnavailableView("Отчёта пока нет", systemImage: "doc.text", description: Text(d.status == .failed ? (d.error ?? "Обработка не удалась") : "Отчёт появится после обработки записи.")) }
                 else { Spacer() }
             case .transcript:
@@ -133,12 +139,15 @@ struct MeetingDetailView: View {
         } catch { self.error = error.localizedDescription }
     }
 
-    private func updateActionItems(_ items: [ActionItem]) async {
-        guard let r = detail?.report else { return }
-        if let updated = try? await APIClient.shared.updateActionItems(meetingId: meetingId, reportId: r.id, items: items), var d = detail {
-            d = MeetingDetail(id: d.id, title: d.title, status: d.status, statusDetail: d.statusDetail, error: d.error, templateId: d.templateId, templateCode: d.templateCode, templateTitle: d.templateTitle, templateEmoji: d.templateEmoji, group: d.group, source: d.source, confidentiality: d.confidentiality, startedAt: d.startedAt, endedAt: d.endedAt, durationSec: d.durationSec, segmentCount: d.segmentCount, hasTranscript: d.hasTranscript, hasReport: d.hasReport, isOwner: d.isOwner, createdAt: d.createdAt, updatedAt: d.updatedAt, contextFields: d.contextFields, participantsHint: d.participantsHint, numSpeakersHint: d.numSpeakersHint, languageHint: d.languageHint, platform: d.platform, markers: d.markers, transcript: d.transcript, report: updated, reportVersions: d.reportVersions)
+    private func toggleTask(_ t: TaskItem) async {
+        guard t.isOwner, var d = detail else { return }
+        do {
+            let updated = try await APIClient.shared.updateTask(t.id, TaskPatch(status: t.isDone ? .open : .done))
+            var list = d.tasks
+            if let i = list.firstIndex(where: { $0.id == t.id }) { list[i] = updated }
+            d = d.with(tasks: list)
             detail = d
-        }
+        } catch { self.error = error.localizedDescription }
     }
 }
 

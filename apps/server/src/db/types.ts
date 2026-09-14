@@ -52,6 +52,10 @@ export interface TranscriptSegment {
 /** speakerId -> отображаемое имя (задаёт пользователь) */
 export type SpeakerMap = Record<string, string>;
 
+/** speakerId -> сторона: ours (коллега), client, vendor */
+export type SpeakerRole = "ours" | "client" | "vendor";
+export type SpeakerRoleMap = Record<string, SpeakerRole>;
+
 export interface ReportSection {
   key: string;
   heading: string;

@@ -40,7 +40,12 @@ final class PushRegistrar: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
-        if let id = response.notification.request.content.userInfo["meetingId"] as? String {
+        let info = response.notification.request.content.userInfo
+        if info["kind"] as? String == "task_reminder" {
+            await MainActor.run { NotificationCenter.default.post(name: .openTasksTab, object: nil) }
+            return
+        }
+        if let id = info["meetingId"] as? String {
             await MainActor.run { onOpenMeeting?(id) }
         }
     }

@@ -1,5 +1,5 @@
 import type { meetingTemplates, meetings, transcripts } from "../db/schema/index.js";
-import type { Marker, Participant, SpeakerMap, TranscriptSegment } from "../db/types.js";
+import type { Marker, Participant, SpeakerMap, SpeakerRole, SpeakerRoleMap, TranscriptSegment } from "../db/types.js";
 import { catalog } from "../templates/catalog.js";
 
 type Template = typeof meetingTemplates.$inferSelect;
@@ -67,15 +67,33 @@ export function formatTimestamp(sec: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}` : `${String(m).padStart(2, "0")}:${String(r).padStart(2, "0")}`;
 }
 
-export function speakerLabel(speakerId: string, map: SpeakerMap): string {
+const ROLE_LABEL: Record<SpeakerRole, string> = { ours: "Коллега", client: "Клиент", vendor: "Вендор" };
+
+/**
+ * Подпись спикера: имя от пользователя → «Клиент N» / «Вендор N» (нумерация среди спикеров той же роли в порядке speaker_id) → «Спикер N».
+ */
+export function speakerLabel(speakerId: string, map: SpeakerMap, roles: SpeakerRoleMap = {}): string {
   const custom = map[speakerId];
   if (custom && custom.trim()) return custom.trim();
-  const n = Number.parseInt(speakerId.replace(/\D+/g, ""), 10);
+  const role = roles[speakerId];
+  if (role === "client" || role === "vendor") {
+    const sameRole = Object.entries(roles)
+      .filter(([, r]) => r === role)
+      .map(([id]) => id)
+      .sort((a, b) => speakerIndex(a) - speakerIndex(b));
+    const idx = sameRole.indexOf(speakerId);
+    return `${ROLE_LABEL[role]} ${idx >= 0 ? idx + 1 : 1}`;
+  }
+  const n = speakerIndex(speakerId);
   return Number.isFinite(n) ? `Спикер ${n + 1}` : speakerId;
 }
 
-export function formatTranscript(segments: TranscriptSegment[], speakers: SpeakerMap): string {
-  return segments.map((s) => `[${formatTimestamp(s.start)}] ${speakerLabel(s.speakerId, speakers)}: ${s.text}`).join("\n");
+function speakerIndex(speakerId: string): number {
+  return Number.parseInt(speakerId.replace(/\D+/g, ""), 10);
+}
+
+export function formatTranscript(segments: TranscriptSegment[], speakers: SpeakerMap, roles: SpeakerRoleMap = {}): string {
+  return segments.map((s) => `[${formatTimestamp(s.start)}] ${speakerLabel(s.speakerId, speakers, roles)}: ${s.text}`).join("\n");
 }
 
 function formatContext(t: Template, m: Meeting): string {
@@ -105,9 +123,18 @@ export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string
   const weekday = m.startedAt.toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty", weekday: "long" });
   const dur = m.durationSec ? `${Math.round(m.durationSec / 60)} мин` : tr.audioDurationSec ? `${Math.round(Number(tr.audioDurationSec) / 60)} мин` : "неизвестно";
   const speakers = tr.speakers ?? {};
-  const speakerLines = Object.keys(speakers).length
-    ? "\nКАРТА СПИКЕРОВ (задана пользователем):\n" + Object.entries(speakers).map(([id, name]) => `- ${id} → ${name}`).join("\n")
-    : "\nКарта спикеров не задана: в транскрипте спикеры обозначены как «Спикер N». Если по контексту ясно, кто это (представился, обращаются по имени) — используй имя, иначе оставляй «Спикер N».";
+  const roles = tr.speakerRoles ?? {};
+  const selfNote = tr.selfSpeakerId
+    ? `\nВЛАДЕЛЕЦ ЗАПИСИ: ${speakerLabel(tr.selfSpeakerId, speakers, roles)} (${tr.selfSpeakerId}) — это пользователь приложения, автор отчёта, сотрудник агентства (сторона «ours»). Задачи, которые он берёт на себя («я сделаю», «беру на себя»), записывай на его имя.`
+    : "";
+  const allIds = [...new Set([...tr.segments.map((s) => s.speakerId), ...Object.keys(speakers), ...Object.keys(roles)])].sort();
+  const hasMap = Object.keys(speakers).length > 0 || Object.keys(roles).length > 0;
+  const roleText: Record<SpeakerRole, string> = { ours: "сотрудник агентства (сторона ours)", client: "представитель клиента (сторона client)", vendor: "представитель вендора/подрядчика (сторона vendor)" };
+  const speakerLines = (hasMap
+    ? "\nКАРТА СПИКЕРОВ (задана пользователем; в транскрипте используются эти подписи):\n" +
+      allIds.map((id) => `- ${id} → ${speakerLabel(id, speakers, roles)}${roles[id] ? ` — ${roleText[roles[id]!]}` : ""}`).join("\n") +
+      "\nСпикеров без имени (например «Клиент 1», «Спикер 3») в отчёте так и называй, не выдумывай имена; если по контексту имя ясно (представился, обращаются по имени) — используй его."
+    : "\nКарта спикеров не задана: в транскрипте спикеры обозначены как «Спикер N». Если по контексту ясно, кто это (представился, обращаются по имени) — используй имя, иначе оставляй «Спикер N».") + selfNote;
 
   return [
     "ДАННЫЕ ВСТРЕЧИ:",
@@ -125,7 +152,7 @@ export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string
     "",
     "ТРАНСКРИПТ (автоматическая расшифровка, возможны ошибки распознавания имён и терминов — исправляй по контексту):",
     "<transcript>",
-    formatTranscript(tr.segments, speakers),
+    formatTranscript(tr.segments, speakers, roles),
     "</transcript>",
     "",
     "Составь отчёт по структуре шаблона. Верни только JSON.",

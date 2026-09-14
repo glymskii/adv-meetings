@@ -215,6 +215,8 @@ async function detailDto(a: Access) {
             languageCode: tr.languageCode,
             segments: tr.segments,
             speakers: tr.speakers,
+            selfSpeakerId: tr.selfSpeakerId ?? null,
+            speakerRoles: tr.speakerRoles ?? {},
             speakerIds: [...new Set(tr.segments.map((s) => s.speakerId))],
             audioDurationSec: tr.audioDurationSec ? Number(tr.audioDurationSec) : null,
             wordCount: tr.wordCount,
@@ -455,9 +457,18 @@ meetingsRoutes.openapi(
   async (c) => {
     const a = await loadMeetingWithAccess(c.req.valid("param").id, c.get("user"));
     requireOwner(a);
-    const { speakers } = c.req.valid("json");
+    const { speakers, selfSpeakerId, speakerRoles } = c.req.valid("json");
     const cleaned = Object.fromEntries(Object.entries(speakers).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
-    await db().update(transcripts).set({ speakers: cleaned }).where(eq(transcripts.meetingId, a.meeting.id));
+    const patch: { speakers: typeof cleaned; selfSpeakerId?: string | null; speakerRoles?: Record<string, "ours" | "client" | "vendor"> } = { speakers: cleaned };
+    if (speakerRoles !== undefined) patch.speakerRoles = speakerRoles;
+    if (selfSpeakerId !== undefined) {
+      patch.selfSpeakerId = selfSpeakerId;
+      // Владелец записи: подставляем имя пользователя, если спикер ещё не назван; роль — коллега
+      const me = c.get("user");
+      if (selfSpeakerId && !cleaned[selfSpeakerId] && me.name?.trim()) cleaned[selfSpeakerId] = me.name.trim();
+      if (selfSpeakerId) patch.speakerRoles = { ...(patch.speakerRoles ?? speakerRoles ?? {}), [selfSpeakerId]: "ours" };
+    }
+    await db().update(transcripts).set(patch).where(eq(transcripts.meetingId, a.meeting.id));
     return c.json(await detailDto(await loadMeetingWithAccess(a.meeting.id, c.get("user"))), 200);
   },
 );
@@ -552,7 +563,7 @@ meetingsRoutes.openapi(
       const [tr] = await d.select().from(transcripts).where(eq(transcripts.meetingId, m.id)).limit(1);
       if (!tr) throw new HTTPException(404, { message: "Транскрипта нет" });
       const { formatTranscript } = await import("../../llm/prompt.js");
-      return c.body(formatTranscript(tr.segments, tr.speakers), 200, { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": cd("txt") });
+      return c.body(formatTranscript(tr.segments, tr.speakers, tr.speakerRoles ?? {}), 200, { "Content-Type": "text/plain; charset=utf-8", "Content-Disposition": cd("txt") });
     }
 
     const [r] = await d.select().from(reports).where(and(eq(reports.meetingId, m.id), eq(reports.isCurrent, true))).limit(1);

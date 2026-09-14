@@ -7,17 +7,34 @@ struct SettingsView: View {
     @State private var apiOverride = UserDefaults.standard.string(forKey: AppConfig.overrideKey) ?? ""
     @State private var localMeetings: [LocalMeeting] = []
     @State private var confirmSignOut = false
+    @State private var name = ""
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Аккаунт") {
+                Section {
                     if let me = auth.me {
+                        HStack {
+                            Text("Имя")
+                            Spacer()
+                            TextField("Как вас зовут", text: $name)
+                                .multilineTextAlignment(.trailing)
+                                .textContentType(.name)
+                                .onSubmit { Task { try? await auth.updateName(name) } }
+                        }
                         LabeledContent("Почта", value: me.email)
                         if let a = me.agencyName { LabeledContent("Агентство", value: a) }
                         LabeledContent("Роль", value: me.role == "member" ? "Сотрудник" : me.role)
                     }
                     Button("Выйти", role: .destructive) { confirmSignOut = true }
+                } header: {
+                    Text("Аккаунт")
+                } footer: {
+                    Text("Имя подставляется в транскрипт и отчёт, когда вы отмечаете себя среди спикеров («Это я»).")
+                }
+                Section("Задачи и сроки") {
+                    NavigationLink { DeadlineSettingsView() } label: { Label("Сроки задач и отчётов", systemImage: "calendar.badge.clock") }
+                    NavigationLink { PeopleManagerView() } label: { Label("Справочник ответственных", systemImage: "person.2") }
                 }
                 Section {
                     Picker("Аудио на устройстве", selection: $retention) {
@@ -55,7 +72,8 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Настройки")
-            .task { await reload() }
+            .task { await reload(); name = auth.me?.name ?? "" }
+            .onChange(of: auth.me?.name) { _, v in if let v, name.isEmpty { name = v } }
             .confirmationDialog("Выйти из аккаунта?", isPresented: $confirmSignOut) {
                 Button("Выйти", role: .destructive) { Task { await auth.signOut() } }
             }

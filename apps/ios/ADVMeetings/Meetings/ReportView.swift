@@ -5,15 +5,10 @@ import SwiftUI
 struct ReportView: View {
     let report: Report
     let meeting: MeetingDetail
-    let onUpdateActionItems: ([ActionItem]) async -> Void
-    @State private var items: [ActionItem]
-
-    init(report: Report, meeting: MeetingDetail, onUpdateActionItems: @escaping ([ActionItem]) async -> Void) {
-        self.report = report
-        self.meeting = meeting
-        self.onUpdateActionItems = onUpdateActionItems
-        _items = State(initialValue: report.actionItems)
-    }
+    let tasks: [TaskItem]
+    let onToggleTask: (TaskItem) async -> Void
+    let onEditTask: (TaskItem) -> Void
+    let onAddTask: () -> Void
 
     var body: some View {
         ScrollView {
@@ -60,26 +55,14 @@ struct ReportView: View {
     @ViewBuilder private func sectionBody(_ s: RenderedSection) -> some View {
         switch s.kind {
         case "action_plan":
-            if items.isEmpty { Text("не озвучено, уточнить").foregroundStyle(.secondary).font(.subheadline) }
-            ForEach($items) { $item in
-                Button {
-                    item.done = !(item.done ?? false)
-                    Task { await onUpdateActionItems(items) }
-                } label: {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: (item.done ?? false) ? "checkmark.circle.fill" : "circle").foregroundStyle((item.done ?? false) ? .green : .secondary).padding(.top, 2)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.task).font(.subheadline).strikethrough(item.done ?? false).foregroundStyle(.primary)
-                            HStack(spacing: 8) {
-                                Label(item.assignee ?? "ответственный не назван", systemImage: "person").foregroundStyle(item.assignee == nil ? .orange : .secondary)
-                                Label(item.deadline ?? "без срока", systemImage: "calendar").foregroundStyle(item.deadline == nil ? .orange : .secondary)
-                            }
-                            .font(.caption)
-                            if let q = item.quote, !q.isEmpty { Text("«\(q)»").font(.caption).italic().foregroundStyle(.tertiary) }
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+            if tasks.isEmpty { Text("не озвучено, уточнить").foregroundStyle(.secondary).font(.subheadline) }
+            ForEach(tasks) { t in
+                TaskRow(task: t, showMeeting: false) { Task { await onToggleTask(t) } }
+                    .onTapGesture { if t.isOwner { onEditTask(t) } }
+                if let q = t.quote, !q.isEmpty { Text("«\(q)»").font(.caption).italic().foregroundStyle(.tertiary).padding(.leading, 32) }
+            }
+            if meeting.isOwner {
+                Button { onAddTask() } label: { Label("Добавить задачу", systemImage: "plus.circle") }.font(.subheadline).padding(.top, 4)
             }
         case "decisions", "participants", "open_questions", "client_requests", "next_meeting":
             if let t = s.table, !t.rows.isEmpty {
@@ -172,56 +155,6 @@ struct SimpleTable: View {
     }
 }
 
-@MainActor
-struct TranscriptView: View {
-    let transcript: Transcript
-    let meetingId: String
-    let canEdit: Bool
-    let onChanged: () async -> Void
-    @State private var renaming: String?
-    @State private var newName = ""
-
-    var body: some View {
-        List {
-            Section {
-                ForEach(transcript.segments) { s in
-                    VStack(alignment: .leading, spacing: 3) {
-                        HStack {
-                            Text(transcript.label(for: s.speakerId)).font(.caption.weight(.semibold)).foregroundStyle(.tint)
-                            Text(Fmt.clock(s.start)).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
-                        }
-                        Text(s.text).font(.subheadline)
-                    }
-                    .contextMenu {
-                        if canEdit { Button("Переименовать спикера") { renaming = s.speakerId; newName = transcript.speakers[s.speakerId] ?? "" } }
-                        Button("Копировать") { UIPasteboard.general.string = s.text }
-                    }
-                }
-            } header: {
-                HStack {
-                    Text("\(transcript.speakerIds.count) говорящих · \(transcript.wordCount) слов")
-                    Spacer()
-                    if canEdit { Text("Долгое нажатие — переименовать спикера").font(.caption2) }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .alert("Имя спикера", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Имя", text: $newName)
-            Button("Сохранить") {
-                guard let id = renaming else { return }
-                var map = transcript.speakers
-                map[id] = newName
-                Task { _ = try? await APIClient.shared.renameSpeakers(meetingId: meetingId, speakers: map); await onChanged() }
-                renaming = nil
-            }
-            Button("Отмена", role: .cancel) { renaming = nil }
-        } message: {
-            Text("После переименования можно пересобрать отчёт с именами (меню ⋯ → Пересобрать).")
-        }
-    }
-}
-
 struct MeetingInfoView: View {
     let detail: MeetingDetail
     let template: MeetingTemplate?
@@ -233,6 +166,11 @@ struct MeetingInfoView: View {
                 LabeledContent("Длительность", value: Fmt.duration(detail.durationSec))
                 if let p = detail.platform, !p.isEmpty { LabeledContent("Платформа", value: p) }
                 LabeledContent("Сегментов аудио", value: "\(detail.segmentCount)")
+                LabeledContent("Отчёт отправить до") {
+                    Text(Fmt.dateTime.string(from: detail.reportDueAt))
+                        .foregroundStyle(detail.reportDueAt < Date() && detail.status == .done ? .red : .primary)
+                }
+                Text("По регламенту холдинга: \(detail.reportSlaHours) ч после встречи (настраивается в Настройках → Сроки)").font(.caption).foregroundStyle(.secondary)
                 LabeledContent("Конфиденциальность", value: detail.confidentiality == "restricted" ? "Ограниченная" : "Стандартная")
             }
             if !detail.contextFields.isEmpty {
@@ -257,11 +195,8 @@ struct MeetingInfoView: View {
                     }
                 }
             }
-            if let t = template, !t.tips.isEmpty {
-                Section("Куда отправить") {
-                    if let s = t.sendTo { Text(s) }
-                    Text("Срок по регламенту холдинга: \(t.slaHours) ч после встречи").font(.footnote).foregroundStyle(.secondary)
-                }
+            if let t = template, let s = t.sendTo {
+                Section("Куда отправить") { Text(s) }
             }
         }
     }

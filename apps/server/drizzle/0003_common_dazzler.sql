@@ -1,0 +1,1 @@
+ALTER TABLE "transcripts" ADD COLUMN "speaker_roles" jsonb DEFAULT '{}'::jsonb NOT NULL;
