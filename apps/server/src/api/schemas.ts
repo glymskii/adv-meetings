@@ -217,7 +217,7 @@ export const MeetingDetailSchema = MeetingSummarySchema.extend({
   markers: z.array(MarkerSchema),
   transcript: TranscriptSchema.nullable(),
   report: ReportSchema.nullable(),
-  reportVersions: z.array(z.object({ id: z.string().uuid(), version: z.number().int(), templateCode: z.string(), createdAt: z.string(), createdBy: z.string() })),
+  reportVersions: z.array(z.object({ id: z.string().uuid(), version: z.number().int(), templateCode: z.string(), createdAt: z.string(), createdBy: z.string(), instructions: z.string().nullable() })),
 }).openapi("MeetingDetail");
 
 export const SegmentRequestBody = z
@@ -250,7 +250,13 @@ export const SpeakersBody = z
   .openapi("SpeakersBody");
 
 export const RegenerateBody = z
-  .object({ templateId: z.string().uuid().optional(), effort: z.enum(["low", "medium", "high", "xhigh"]).optional(), draft: z.boolean().optional() })
+  .object({
+    templateId: z.string().uuid().optional(),
+    effort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+    draft: z.boolean().optional(),
+    /** Что исправить в отчёте (свободный текст) — ИИ внесёт правки в текущую версию */
+    instructions: z.string().trim().max(4000).optional(),
+  })
   .openapi("RegenerateBody");
 
 export const ShareBody = z.object({ email: z.string().email(), scope: z.enum(["report", "report_transcript"]).default("report") }).openapi("ShareBody");

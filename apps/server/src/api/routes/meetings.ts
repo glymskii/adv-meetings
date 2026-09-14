@@ -191,7 +191,7 @@ async function detailDto(a: Access) {
   const t = await templateById(m.templateId);
   const [tr] = await d.select().from(transcripts).where(eq(transcripts.meetingId, m.id)).limit(1);
   const [cur] = await d.select().from(reports).where(and(eq(reports.meetingId, m.id), eq(reports.isCurrent, true))).limit(1);
-  const versions = await d.select({ id: reports.id, version: reports.version, templateCode: reports.templateCode, createdAt: reports.createdAt, createdBy: reports.createdBy }).from(reports).where(eq(reports.meetingId, m.id)).orderBy(desc(reports.version));
+  const versions = await d.select({ id: reports.id, version: reports.version, templateCode: reports.templateCode, createdAt: reports.createdAt, createdBy: reports.createdBy, instructions: reports.instructions }).from(reports).where(eq(reports.meetingId, m.id)).orderBy(desc(reports.version));
   const reportTemplate = cur ? (cur.templateId === t.id ? t : await templateById(cur.templateId)) : t;
   const includeInternal = a.scope === "full";
   const showTranscript = a.scope === "full" || a.scope === "report_transcript";
@@ -494,7 +494,7 @@ meetingsRoutes.openapi(
     if (!["done", "failed"].includes(a.meeting.status)) throw new HTTPException(409, { message: "Встреча уже обрабатывается" });
     if (body.templateId) await templateById(body.templateId);
     const [m] = await db().update(meetings).set({ status: "queued", statusDetail: "Пересборка отчёта", error: null }).where(eq(meetings.id, a.meeting.id)).returning();
-    await enqueueProcessMeeting({ meetingId: a.meeting.id, regenerate: true, templateId: body.templateId, effort: body.effort, model: body.draft ? config().ANTHROPIC_MODEL_DRAFT : undefined });
+    await enqueueProcessMeeting({ meetingId: a.meeting.id, regenerate: true, templateId: body.templateId, effort: body.effort, model: body.draft ? config().ANTHROPIC_MODEL_DRAFT : undefined, instructions: body.instructions });
     const t = await templateById(m!.templateId);
     return c.json(summaryDto(m!, t, { hasTranscript: true, hasReport: true, isOwner: true }), 202);
   },

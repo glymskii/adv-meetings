@@ -19,6 +19,8 @@ export interface ProcessMeetingJob {
   templateId?: string;
   effort?: "low" | "medium" | "high" | "xhigh";
   model?: string;
+  /** Текстовые правки пользователя для ИИ-пересборки */
+  instructions?: string;
 }
 
 export interface NotifyJob {

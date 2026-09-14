@@ -220,6 +220,8 @@ export const reports = pgTable(
     /** Ручные правки текста отчёта пользователем (перед экспортом) */
     editedAt: timestamp("edited_at", { withTimezone: true }),
     editedBy: text("edited_by"),
+    /** Инструкции пользователя для ИИ-пересборки (что исправить) */
+    instructions: text("instructions"),
     ...timestamps,
   },
   (t) => [uniqueIndex("reports_meeting_version_idx").on(t.meetingId, t.version)],

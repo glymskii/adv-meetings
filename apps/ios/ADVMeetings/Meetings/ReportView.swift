@@ -10,6 +10,7 @@ struct ReportView: View {
     let onEditTask: (TaskItem) -> Void
     let onAddTask: () -> Void
     let onEditReport: () -> Void
+    let onAIFix: () -> Void
 
     var body: some View {
         ScrollView {
@@ -28,8 +29,13 @@ struct ReportView: View {
                         if let e = report.editedAt { Label("Отредактирован \(Fmt.dateTime.string(from: e))", systemImage: "pencil").font(.caption2).foregroundStyle(.tertiary) }
                     }
                     if meeting.isOwner {
-                        Button { onEditReport() } label: { Label("Редактировать текст перед экспортом", systemImage: "pencil.line").font(.subheadline) }
-                            .buttonStyle(.bordered).controlSize(.small).padding(.top, 4)
+                        HStack(spacing: 8) {
+                            Button { onAIFix() } label: { Label("Исправить с ИИ", systemImage: "wand.and.stars").font(.subheadline) }
+                                .buttonStyle(.borderedProminent).controlSize(.small)
+                            Button { onEditReport() } label: { Label("Править текст", systemImage: "pencil.line").font(.subheadline) }
+                                .buttonStyle(.bordered).controlSize(.small)
+                        }
+                        .padding(.top, 4)
                     }
                 }
 
@@ -199,7 +205,10 @@ struct MeetingInfoView: View {
             if detail.reportVersions.count > 1 {
                 Section("Версии отчёта") {
                     ForEach(detail.reportVersions) { v in
-                        LabeledContent("v\(v.version) · \(v.templateCode)", value: Fmt.dateTime.string(from: v.createdAt))
+                        VStack(alignment: .leading, spacing: 2) {
+                            LabeledContent("v\(v.version) · \(v.createdBy == "regenerate" ? "пересборка" : "авто")", value: Fmt.dateTime.string(from: v.createdAt))
+                            if let i = v.instructions, !i.isEmpty { Text("Правки: \(i)").font(.caption).foregroundStyle(.secondary).lineLimit(3) }
+                        }
                     }
                 }
             }
@@ -212,24 +221,60 @@ struct MeetingInfoView: View {
 
 @MainActor
 struct RegenerateSheet: View {
+    enum Mode { case fix, rebuild }
+
     let detail: MeetingDetail
     let onDone: () async -> Void
+    var mode: Mode = .fix
     @Environment(TemplateStore.self) private var store
     @Environment(\.dismiss) private var dismiss
     @State private var templateId: String
     @State private var draft = false
+    @State private var instructions = ""
     @State private var busy = false
     @State private var error: String?
+    @FocusState private var focused: Bool
 
-    init(detail: MeetingDetail, onDone: @escaping () async -> Void) {
+    init(detail: MeetingDetail, mode: Mode = .fix, onDone: @escaping () async -> Void) {
         self.detail = detail
+        self.mode = mode
         self.onDone = onDone
         _templateId = State(initialValue: detail.templateId)
     }
 
+    private let examples = [
+        "Бюджет — 40 млн тенге на медиа, продакшн отдельно",
+        "Спикер 2 — это Данияр, бренд-менеджер клиента",
+        "Убери внутренние комментарии про сроки",
+        "Добавь в action plan: Айгерим готовит КП к пятнице",
+    ]
+
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    TextEditor(text: $instructions)
+                        .frame(minHeight: 120)
+                        .focused($focused)
+                        .overlay(alignment: .topLeading) {
+                            if instructions.isEmpty {
+                                Text("Например: «Спикер 2 — это Данияр, бренд-менеджер клиента. Бюджет 40 млн — это медиа, продакшн отдельно. Убери пункт про наружку в Астане.»")
+                                    .foregroundStyle(.tertiary).font(.subheadline).padding(.top, 8).padding(.leading, 4).allowsHitTesting(false)
+                            }
+                        }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(examples, id: \.self) { ex in
+                                Button(ex) { instructions += (instructions.isEmpty ? "" : "\n") + ex }
+                                    .buttonStyle(.bordered).controlSize(.small).font(.caption)
+                            }
+                        }
+                    }
+                } header: {
+                    Text("Что исправить в отчёте")
+                } footer: {
+                    Text("ИИ возьмёт транскрипт и текущую версию отчёта и внесёт ваши правки, сохранив остальное. Прежняя версия остаётся в истории (вкладка «Инфо»).")
+                }
                 Section("Шаблон отчёта") {
                     Picker("Тип встречи", selection: $templateId) {
                         ForEach(store.templates) { t in Text("\(t.emoji) \(t.title)").tag(t.id) }
@@ -238,26 +283,28 @@ struct RegenerateSheet: View {
                 Section {
                     Toggle("Быстрый черновик (дешевле, чуть проще)", isOn: $draft)
                 } footer: {
-                    Text("Пересборка использует уже готовый транскрипт — аудио заново не нужно. Имена спикеров, если вы их задали, попадут в отчёт.")
+                    Text("Аудио заново не нужно — используется готовый транскрипт. Заданные имена и роли спикеров попадут в отчёт.")
                 }
                 if let error { Section { ErrorBanner(message: error) } }
             }
-            .navigationTitle("Пересобрать отчёт")
+            .navigationTitle(mode == .fix ? "Исправить с помощью ИИ" : "Пересобрать отчёт")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Запустить") { Task { await run() } }.disabled(busy)
+                    Button(instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Пересобрать" : "Исправить") { Task { await run() } }.disabled(busy)
                 }
+                ToolbarItemGroup(placement: .keyboard) { Spacer(); Button("Готово") { focused = false } }
             }
+            .onAppear { if mode == .fix { focused = true } }
         }
-        .presentationDetents([.medium])
     }
 
     private func run() async {
         busy = true; defer { busy = false }
+        let text = instructions.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            _ = try await APIClient.shared.regenerate(meetingId: detail.id, body: RegenerateBody(templateId: templateId == detail.templateId ? nil : templateId, effort: nil, draft: draft ? true : nil))
+            _ = try await APIClient.shared.regenerate(meetingId: detail.id, body: RegenerateBody(templateId: templateId == detail.templateId ? nil : templateId, effort: nil, draft: draft ? true : nil, instructions: text.isEmpty ? nil : text))
             dismiss()
             await onDone()
         } catch { self.error = error.localizedDescription }

@@ -16,6 +16,10 @@ export type Effort = "low" | "medium" | "high" | "xhigh";
 export interface SummarizeOptions {
   model?: string;
   effort?: Effort;
+  /** Что исправить (свободный текст пользователя) */
+  instructions?: string;
+  /** Предыдущая версия отчёта (markdown) — модель вносит правки, сохраняя остальное */
+  previousMarkdown?: string;
 }
 
 export interface SummarizeResult {
@@ -51,7 +55,7 @@ export async function summarizeTranscript(t: Template, m: Meeting, tr: Transcrip
   const model = opts.model ?? cfg.ANTHROPIC_MODEL;
   const effort = opts.effort ?? "high";
   const { stable, template } = buildSystemPrompt(t);
-  const user = buildUserPrompt(t, m, tr);
+  const user = buildUserPrompt(t, m, tr, { instructions: opts.instructions, previousMarkdown: opts.previousMarkdown });
   const started = Date.now();
 
   try {

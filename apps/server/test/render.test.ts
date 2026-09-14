@@ -64,6 +64,7 @@ const report = {
   isCurrent: true,
   editedAt: null,
   editedBy: null,
+  instructions: null,
   createdAt: new Date(),
   updatedAt: new Date(),
 };

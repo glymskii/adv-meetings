@@ -181,15 +181,21 @@ export async function purgeAudio(meetingId: string): Promise<number> {
 }
 
 /** Шаг 4: саммари → новая версия отчёта. */
-async function summarizeStep(meeting: Meeting, template: Template, opts: { effort?: Effort; model?: string; createdBy: "pipeline" | "regenerate" }) {
+async function summarizeStep(meeting: Meeting, template: Template, opts: { effort?: Effort; model?: string; createdBy: "pipeline" | "regenerate"; instructions?: string }) {
   const d = db();
-  await setStatus(meeting.id, "summarizing", "Составление отчёта");
+  await setStatus(meeting.id, "summarizing", opts.instructions ? "Правка отчёта по инструкциям" : "Составление отчёта");
   const [tr] = await d.select().from(transcripts).where(eq(transcripts.meetingId, meeting.id)).limit(1);
   if (!tr) throw new PipelineError("Нет транскрипта для саммари", false);
 
+  let previousMarkdown: string | undefined;
+  if (opts.instructions) {
+    const [prev] = await d.select({ markdown: reports.markdown }).from(reports).where(and(eq(reports.meetingId, meeting.id), eq(reports.isCurrent, true))).limit(1);
+    previousMarkdown = prev?.markdown;
+  }
+
   let res;
   try {
-    res = await summarizeTranscript(template, meeting, tr, { effort: opts.effort, model: opts.model });
+    res = await summarizeTranscript(template, meeting, tr, { effort: opts.effort, model: opts.model, instructions: opts.instructions, previousMarkdown });
   } catch (e) {
     if (e instanceof SummarizeError) throw new PipelineError(`Ошибка саммари: ${e.message}`, e.retryable);
     throw e;
@@ -227,8 +233,9 @@ async function summarizeStep(meeting: Meeting, template: Template, opts: { effor
     costUsd: res.costUsd.toString(),
     createdBy: opts.createdBy,
     isCurrent: true,
+    instructions: opts.instructions ?? null,
   };
-  const markdown = renderMarkdown(template, { ...base, id: "", createdAt: new Date(), updatedAt: new Date() } as typeof reports.$inferSelect, {
+  const markdown = renderMarkdown(template, { ...base, id: "", createdAt: new Date(), updatedAt: new Date(), editedAt: null, editedBy: null } as unknown as typeof reports.$inferSelect, {
     startedAt: meeting.startedAt,
     durationSec: meeting.durationSec,
     platform: meeting.platform,
@@ -293,7 +300,7 @@ export async function processMeeting(job: ProcessMeetingJob): Promise<void> {
       await purgeAudio(meetingId);
     }
     const refreshed = (await loadMeeting(meetingId)).meeting;
-    await summarizeStep(refreshed, template, { effort: job.effort, model: job.model, createdBy: job.regenerate ? "regenerate" : "pipeline" });
+    await summarizeStep(refreshed, template, { effort: job.effort, model: job.model, createdBy: job.regenerate ? "regenerate" : "pipeline", instructions: job.instructions?.trim() || undefined });
     await enqueueNotify({ meetingId, kind: "report_ready" });
   } catch (e) {
     const err = e as Error;

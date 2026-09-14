@@ -307,6 +307,7 @@ struct ReportVersion: Codable, Hashable, Identifiable {
     let templateCode: String
     let createdAt: Date
     let createdBy: String
+    let instructions: String?
 }
 
 struct MeetingDetail: Codable, Hashable, Identifiable {
@@ -533,7 +534,7 @@ struct SpeakersBody: Encodable {
     }
 }
 struct UpdateUserBody: Encodable { let name: String }
-struct RegenerateBody: Encodable { var templateId: String?; var effort: String?; var draft: Bool? }
+struct RegenerateBody: Encodable { var templateId: String?; var effort: String?; var draft: Bool?; var instructions: String? }
 struct ActionItemsBody: Encodable { let actionItems: [ActionItem] }
 struct ShareBody: Encodable { let email: String; var scope: String = "report" }
 struct Share: Decodable, Identifiable { let id: String; let recipientEmail: String; let scope: String; let createdAt: Date }

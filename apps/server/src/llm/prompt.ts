@@ -117,7 +117,12 @@ function formatMarkers(markers: Marker[]): string {
   return "\nОТМЕТКИ ПОЛЬЗОВАТЕЛЯ ВО ВРЕМЯ ЗАПИСИ (важные моменты):\n" + markers.map((mk) => `- [${formatTimestamp(mk.atSec)}] ${mk.note?.trim() || "важный момент"}`).join("\n");
 }
 
-export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string {
+export interface RevisionContext {
+  instructions?: string;
+  previousMarkdown?: string;
+}
+
+export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript, revision: RevisionContext = {}): string {
   const date = m.startedAt.toLocaleString("ru-RU", { timeZone: "Asia/Almaty", dateStyle: "long", timeStyle: "short" });
   const isoDate = new Date(m.startedAt.getTime() + 5 * 3600 * 1000).toISOString().slice(0, 10);
   const weekday = m.startedAt.toLocaleDateString("ru-RU", { timeZone: "Asia/Almaty", weekday: "long" });
@@ -154,7 +159,27 @@ export function buildUserPrompt(t: Template, m: Meeting, tr: Transcript): string
     "<transcript>",
     formatTranscript(tr.segments, speakers, roles),
     "</transcript>",
+    ...revisionBlock(revision),
     "",
-    "Составь отчёт по структуре шаблона. Верни только JSON.",
+    revision.instructions
+      ? "Подготовь НОВУЮ версию отчёта по структуре шаблона с учётом правок пользователя. Верни только JSON."
+      : "Составь отчёт по структуре шаблона. Верни только JSON.",
   ].join("\n");
+}
+
+function revisionBlock(r: RevisionContext): string[] {
+  if (!r.instructions?.trim()) return [];
+  const out: string[] = [""];
+  if (r.previousMarkdown?.trim()) {
+    out.push("ПРЕДЫДУЩАЯ ВЕРСИЯ ОТЧЁТА (её нужно исправить, а не переписывать с нуля — сохраняй всё, что не затронуто правками, включая формулировки, которые пользователь мог редактировать вручную):");
+    out.push("<previous_report>");
+    out.push(r.previousMarkdown.trim().slice(0, 40_000));
+    out.push("</previous_report>");
+    out.push("");
+  }
+  out.push("ПРАВКИ ОТ ПОЛЬЗОВАТЕЛЯ (обязательно выполнить; если правка противоречит транскрипту — выполни её, но отметь расхождение в missingInfo):");
+  out.push("<instructions>");
+  out.push(r.instructions.trim().slice(0, 4_000));
+  out.push("</instructions>");
+  return out;
 }
