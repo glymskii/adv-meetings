@@ -53,6 +53,8 @@ const schema = z.object({
   APNS_KEY_ID: z.string().optional(),
   APNS_TEAM_ID: z.string().optional(),
   APNS_PRIVATE_KEY: z.string().optional(),
+  /** Путь к .p8 (локальная разработка); имеет приоритет над APNS_PRIVATE_KEY */
+  APNS_PRIVATE_KEY_FILE: z.string().optional(),
   APNS_BUNDLE_ID: z.string().default("kz.adv.meetings"),
   APNS_PRODUCTION: bool,
 

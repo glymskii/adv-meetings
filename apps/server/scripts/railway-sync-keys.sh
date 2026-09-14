@@ -10,7 +10,13 @@ ENV_FILE="apps/server/.env"
 get() { grep -E "^$1=" "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '\r' | sed 's/^"//; s/"$//'; }
 
 ARGS=()
-for KEY in ANTHROPIC_API_KEY ELEVENLABS_API_KEY RESEND_API_KEY EMAIL_FROM ALLOWED_EMAIL_DOMAINS; do
+# APNs: ключ из файла .p8 → одна строка с \n (в Railway многострочные значения неудобны)
+P8="$(get APNS_PRIVATE_KEY_FILE)"
+if [ -n "$P8" ] && [ -f "$P8" ]; then
+  ARGS+=("APNS_PRIVATE_KEY=$(awk 'BEGIN{ORS="\\n"} {print}' "$P8")")
+  echo "  APNS_PRIVATE_KEY: из файла $P8"
+fi
+for KEY in ANTHROPIC_API_KEY ELEVENLABS_API_KEY RESEND_API_KEY EMAIL_FROM ALLOWED_EMAIL_DOMAINS APNS_KEY_ID APNS_TEAM_ID APNS_BUNDLE_ID APNS_PRODUCTION; do
   VAL="$(get "$KEY")"
   if [ -n "$VAL" ]; then
     ARGS+=("$KEY=$VAL")

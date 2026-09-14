@@ -1,4 +1,5 @@
 import { createSign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
@@ -12,16 +13,34 @@ import type { NotifyJob } from "../queue/boss.js";
  */
 let cachedJwt: { token: string; issuedAt: number } | null = null;
 
+let cachedKey: string | null | undefined;
+function apnsPrivateKey(): string | null {
+  if (cachedKey !== undefined) return cachedKey;
+  const cfg = config();
+  if (cfg.APNS_PRIVATE_KEY_FILE) {
+    try {
+      cachedKey = readFileSync(cfg.APNS_PRIVATE_KEY_FILE, "utf8");
+    } catch (e) {
+      logger.error({ file: cfg.APNS_PRIVATE_KEY_FILE, err: (e as Error).message }, "APNS_PRIVATE_KEY_FILE не читается");
+      cachedKey = null;
+    }
+  } else {
+    cachedKey = cfg.APNS_PRIVATE_KEY ? cfg.APNS_PRIVATE_KEY.replace(/\\n/g, "\n") : null;
+  }
+  return cachedKey;
+}
+
 function apnsJwt(): string | null {
   const cfg = config();
-  if (!cfg.APNS_KEY_ID || !cfg.APNS_TEAM_ID || !cfg.APNS_PRIVATE_KEY) return null;
+  const key = apnsPrivateKey();
+  if (!cfg.APNS_KEY_ID || !cfg.APNS_TEAM_ID || !key) return null;
   const now = Math.floor(Date.now() / 1000);
   if (cachedJwt && now - cachedJwt.issuedAt < 50 * 60) return cachedJwt.token;
   const header = Buffer.from(JSON.stringify({ alg: "ES256", kid: cfg.APNS_KEY_ID })).toString("base64url");
   const payload = Buffer.from(JSON.stringify({ iss: cfg.APNS_TEAM_ID, iat: now })).toString("base64url");
   const signer = createSign("SHA256");
   signer.update(`${header}.${payload}`);
-  const signature = signer.sign({ key: cfg.APNS_PRIVATE_KEY.replace(/\\n/g, "\n"), dsaEncoding: "ieee-p1363" }).toString("base64url");
+  const signature = signer.sign({ key, dsaEncoding: "ieee-p1363" }).toString("base64url");
   cachedJwt = { token: `${header}.${payload}.${signature}`, issuedAt: now };
   return cachedJwt.token;
 }
