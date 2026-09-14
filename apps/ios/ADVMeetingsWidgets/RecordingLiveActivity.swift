@@ -20,7 +20,10 @@ struct RecordingLiveActivity: Widget {
                     .font(.title3)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    TimerText(state: context.state).font(.title3.monospacedDigit().weight(.semibold))
+                    TimerText(state: context.state)
+                        .font(.title3.monospacedDigit().weight(.semibold))
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                        .frame(minWidth: 72, alignment: .trailing)
                 }
                 DynamicIslandExpandedRegion(.center) {
                     Text(context.attributes.title).font(.caption).lineLimit(1)
@@ -31,7 +34,7 @@ struct RecordingLiveActivity: Widget {
             } compactLeading: {
                 Image(systemName: context.state.isPaused ? "pause.fill" : "record.circle.fill").foregroundStyle(context.state.isPaused ? .orange : .red)
             } compactTrailing: {
-                TimerText(state: context.state).font(.caption.monospacedDigit()).frame(maxWidth: 60)
+                TimerText(state: context.state).font(.caption.monospacedDigit()).lineLimit(1).minimumScaleFactor(0.7).frame(maxWidth: 64)
             } minimal: {
                 Image(systemName: "record.circle.fill").foregroundStyle(context.state.isPaused ? .orange : .red)
             }
@@ -50,7 +53,7 @@ private struct LockScreenView: View {
                     Text(context.attributes.title).font(.subheadline.weight(.semibold)).lineLimit(1)
                 }
                 Spacer()
-                TimerText(state: context.state).font(.title2.monospacedDigit().weight(.semibold))
+                TimerText(state: context.state).font(.title2.monospacedDigit().weight(.semibold)).lineLimit(1).minimumScaleFactor(0.7)
             }
             HStack {
                 Controls(state: context.state)
@@ -71,6 +74,7 @@ private struct TimerText: View {
             Text(clock(state.pausedElapsed))
         } else {
             Text(timerInterval: state.timerStart...state.timerStart.addingTimeInterval(12 * 3600), countsDown: false)
+                .multilineTextAlignment(.trailing)
         }
     }
     private func clock(_ t: TimeInterval) -> String {

@@ -47,7 +47,29 @@ railway up --service api --detach -m "…"
 railway up --service worker --detach -m "…"
 ```
 
-Переменные окружения — см. `apps/server/.env.example`. Ключи `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `RESEND_API_KEY` задаются в Railway.
+Переменные окружения — см. `apps/server/.env.example`. Ключи `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `RESEND_API_KEY` задаются в Railway:
+
+```bash
+railway variable set ANTHROPIC_API_KEY=sk-ant-… ELEVENLABS_API_KEY=… RESEND_API_KEY=re_… --service api
+railway variable set ANTHROPIC_API_KEY=sk-ant-… ELEVENLABS_API_KEY=… RESEND_API_KEY=re_… --service worker
+```
+
+Пока `RESEND_API_KEY` пуст, одноразовые коды входа видны в логах `api` (`railway logs --service api`).
+
+Сквозной прогон на реальном аудио без мобилки: `pnpm --filter @adv/server e2e:pipeline -- путь/к/записи.m4a client_brief auto 4`.
+
+## iOS-приложение
+
+```bash
+cd apps/ios && xcodegen generate      # ADVMeetings.xcodeproj не хранится в git
+open ADVMeetings.xcodeproj
+```
+
+Debug-сборка ходит на `http://localhost:3000` (симулятор видит localhost Mac), Release — на Railway (`API_BASE_URL` в `project.yml`). URL можно переопределить в Настройках приложения. Bundle ID `kz.adv.meetings`, команда JWL983DY46, iOS 17+.
+
+Что реализовано: вход по одноразовому коду на почту (+ Sign in with Apple), выбор типа встречи (3 группы → 12 подтипов, недавние), форма контекста, запись в фоне и при блокировке экрана (AVAudioEngine, сегменты по 5 минут, AAC 16 кГц mono), Live Activity с кнопками пауза/стоп, отметки во время записи, фоновая загрузка сегментов, восстановление после краша, импорт аудио/видео файлов, экран обработки (SSE), отчёт по разделам с чек-листом action items, транскрипт с переименованием спикеров, пересборка отчёта по другому шаблону, экспорт DOCX/PDF/MD/TXT через share sheet, доступ коллегам по email, настройки хранения аудио.
+
+Проверка фоновой записи при заблокированном экране, прерываний звонком и AirPods — только на реальном устройстве (чек-лист в docs/PLAN.md).
 
 ## Тесты
 
