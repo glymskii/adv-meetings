@@ -61,6 +61,12 @@ pnpm worker                                              # воркер пайп
 
 Проверка: `curl localhost:3000/health`, OpenAPI — `localhost:3000/api/openapi.json`. Без `RESEND_API_KEY` коды входа печатаются в лог API. `FAKE_PROVIDERS=true` подменяет ElevenLabs и Anthropic заглушками — пайплайн проходит целиком без ключей. С локальным MinIO аудио отправляется в ElevenLabs байтами (`STT_UPLOAD_MODE=auto`), в проде — по presigned-ссылке.
 
+Демо-данные для показа и скриншотов (вымышленные агентство, клиент и сотрудники; бриф с эталонным транскриптом на 4 спикера, отчётом и задачами; вход под `asel.nurlanova@orbita.kz` по коду из лога API):
+
+```bash
+pnpm --filter @adv/server exec tsx --env-file=.env scripts/seed-showcase.ts
+```
+
 Сквозной прогон на реальном аудио без телефона:
 
 ```bash

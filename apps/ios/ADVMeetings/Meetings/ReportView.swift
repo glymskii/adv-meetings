@@ -335,7 +335,7 @@ struct RegenerateSheet: View {
                 if let error { Section { ErrorBanner(message: error) } }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Исправить отчёт")
+            .navigationTitle("Правка с ИИ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }

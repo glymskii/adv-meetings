@@ -175,7 +175,7 @@ struct ProcessingBanner: View {
                     .foregroundStyle(detail.status == .failed ? .red : .accentColor)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(detail.status.title).font(.subheadline.weight(.semibold))
-                    Text(detail.status == .failed ? (detail.error ?? "Не удалось обработать запись") : (detail.statusDetail ?? "Обычно занимает 2–5 минут. Можно закрыть — пришлём уведомление."))
+                    Text(detail.status == .failed ? (detail.error ?? "Не удалось обработать запись") : (detail.statusDetail.flatMap { $0 == detail.status.title ? nil : $0 } ?? "Обычно занимает 2–5 минут. Можно закрыть — пришлём уведомление."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -198,7 +198,7 @@ struct PipelineSteps: View {
                 let done = i < idx, current = i == idx
                 HStack(spacing: 4) {
                     Circle().fill(done ? Color.green : current ? Color.accentColor : Color.secondary.opacity(0.3)).frame(width: 8, height: 8)
-                    Text(step.1).font(.caption2).foregroundStyle(current ? .primary : .secondary)
+                    Text(step.1).font(.caption2).foregroundStyle(current ? .primary : .secondary).lineLimit(1).fixedSize()
                 }
                 if i < steps.count - 1 { Rectangle().fill(Color.secondary.opacity(0.2)).frame(height: 1) }
             }

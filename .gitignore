@@ -38,3 +38,6 @@ apps/ios/ADVMeetings.xcodeproj/
 # Исходные документы заказчика и их сырой дамп — не публикуются
 docs/source/
 packages/shared/templates.raw.json
+
+# Маркетинговые материалы (скриншоты для соцсетей) — не публикуем
+docs/marketing/

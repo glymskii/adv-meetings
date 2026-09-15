@@ -46,6 +46,7 @@ struct TranscriptView: View {
                         VStack(alignment: .leading, spacing: 3) {
                             HStack(spacing: 6) {
                                 Text(transcript.label(for: s.speakerId)).font(.caption.weight(.semibold)).foregroundStyle(.tint)
+                                    .onTapGesture { if canEdit { picking = s.speakerId } } // как и обещает подсказка: тап по имени — окно «Кто это?»
                                 if transcript.selfSpeakerId == s.speakerId { Image(systemName: "person.crop.circle.badge.checkmark").font(.caption2).foregroundStyle(.tint) }
                                 Text(Fmt.clock(s.start)).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
                             }
