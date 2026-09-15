@@ -75,6 +75,16 @@ actor LocalStore {
 
     func fileURL(for segment: LocalSegment) -> URL { directory(for: segment.meetingId).appending(path: segment.fileName) }
 
+    /// Выполняет действие с файлом сегмента, пока тот гарантированно существует. Все удаления файлов идут через этот же
+    /// actor, поэтому между проверкой и действием файл исчезнуть не может (нужно фоновой URLSession: uploadTask(fromFile:)
+    /// на отсутствующем файле бросает необрабатываемое исключение).
+    func withSegmentFile<T>(_ segment: LocalSegment, _ body: (URL) -> T) -> T? {
+        guard let m = meetings[segment.meetingId], m.hasAudio, m.segments.contains(where: { $0.seq == segment.seq }) else { return nil }
+        let url = fileURL(for: segment)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return body(url)
+    }
+
     func all() -> [LocalMeeting] { meetings.values.sorted { $0.startedAt > $1.startedAt } }
     func meeting(_ id: String) -> LocalMeeting? { meetings[id] }
 

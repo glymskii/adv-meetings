@@ -74,26 +74,6 @@ struct StatusBadge: View {
     }
 }
 
-struct LevelMeter: View {
-    let level: Float
-    let isActive: Bool
-    @State private var history: [Float] = Array(repeating: 0, count: 40)
-    var body: some View {
-        HStack(alignment: .center, spacing: 3) {
-            ForEach(history.indices, id: \.self) { i in
-                Capsule()
-                    .fill(isActive ? Color.accentColor : Color.secondary.opacity(0.4))
-                    .frame(width: 4, height: max(4, CGFloat(history[i]) * 60))
-            }
-        }
-        .frame(height: 64)
-        .onChange(of: level) { _, v in
-            history.removeFirst()
-            history.append(isActive ? v : 0)
-        }
-    }
-}
-
 struct ErrorBanner: View {
     let message: String
     var body: some View {

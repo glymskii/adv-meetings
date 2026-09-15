@@ -4,6 +4,7 @@
  *   tsx scripts/asc.ts group [название]       — создать внутреннюю группу (доступ ко всем сборкам), вывести её id
  *   tsx scripts/asc.ts testers                — список бета-тестеров
  *   tsx scripts/asc.ts add <groupId> <email>  — добавить тестера в группу (внешние группы)
+ *   tsx scripts/asc.ts crashes [n]            — крэш-фидбек из TestFlight: список и текст n последних крэш-логов (по умолчанию 1)
  * Нужны переменные ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (или ~/Documents/asc-api.json), ASC_APP_ID.
  */
 import { readFileSync } from "node:fs";
@@ -62,6 +63,21 @@ if (cmd === "builds") {
     data: { type: "betaTesters", attributes: { email, firstName: first || undefined, lastName: last || undefined }, relationships: { betaGroups: { data: [{ type: "betaGroups", id: groupId }] } } },
   });
   console.log(`добавлен тестер ${r.data.attributes.email} (${r.data.id})`);
+} else if (cmd === "crashes") {
+  const n = Number(args[0] ?? 1);
+  const r = await api("GET", `/apps/${APP_ID}/betaFeedbackCrashSubmissions?sort=-createdDate&limit=10&include=build&fields[builds]=version`);
+  for (const c of r.data) {
+    const a = c.attributes;
+    const build = r.included?.find((i: any) => i.id === c.relationships?.build?.data?.id)?.attributes?.version;
+    console.log(`${c.id} — ${a.createdDate} — build ${build ?? "?"} — ${a.deviceModel} iOS ${a.osVersion} — «${a.comment ?? ""}»`);
+  }
+  if (!r.data.length) console.log("крэш-фидбека нет");
+  for (const c of r.data.slice(0, n)) {
+    const log = await api("GET", `/betaFeedbackCrashSubmissions/${c.id}/crashLog`);
+    const attrs = log?.data?.attributes ?? {};
+    const text: string = attrs.logText ?? (attrs.url ? await (await fetch(attrs.url)).text() : JSON.stringify(log).slice(0, 800));
+    console.log(`\n===== crash log ${c.id} (${text.length} bytes) =====\n${text}`);
+  }
 } else {
-  console.log("команды: builds | group [name] | testers | add <groupId> <email> [first] [last]");
+  console.log("команды: builds | group [name] | testers | add <groupId> <email> [first] [last] | crashes [n]");
 }

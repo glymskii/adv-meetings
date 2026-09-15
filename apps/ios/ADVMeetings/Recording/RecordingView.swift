@@ -1,6 +1,7 @@
 import SwiftUI
 
-/// Экран записи: таймер, уровень, пауза, отметка, стоп. Показывается поверх всего на время записи и загрузки.
+/// Экран записи: лента-волна и осциллограмма по уровню микрофона, таймер, пауза, отметка, стоп.
+/// Показывается поверх всего на время записи и загрузки.
 @MainActor
 struct RecordingView: View {
     @Environment(RecordingCoordinator.self) private var rec
@@ -10,22 +11,25 @@ struct RecordingView: View {
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 28) {
-                header
-                Spacer()
-                timer
-                LevelMeter(level: rec.level, isActive: rec.phase == .recording)
-                    .padding(.horizontal, 32)
-                statusLine
-                Spacer()
-                controls
+            VStack(spacing: 0) {
+                header.padding(.horizontal, 24)
+                Spacer(minLength: 8)
+                FlowWaveView(levels: rec.levels, isActive: rec.phase == .recording, isAnimating: isLive)
+                    .frame(height: 150)
+                RecordingClockLabel(levels: rec.levels, isRunning: rec.phase == .recording)
+                    .padding(.top, 4)
+                ScrollingWaveformView(levels: rec.levels, markers: rec.meeting?.markers ?? [], isRunning: rec.phase == .recording)
+                    .frame(height: 116)
+                    .padding(.top, 16)
+                statusLine.padding(.top, 20).padding(.horizontal, 24)
+                Spacer(minLength: 12)
+                controls.padding(.bottom, 12)
             }
-            .padding(24)
+            .padding(.top, 8)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if case .recording = rec.phase { Button("Отменить", role: .destructive) { confirmDiscard = true } }
-                    else if case .paused = rec.phase { Button("Отменить", role: .destructive) { confirmDiscard = true } }
+                    if isLive { Button("Отменить", role: .destructive) { confirmDiscard = true } }
                 }
             }
             .confirmationDialog("Отменить запись? Аудио будет удалено.", isPresented: $confirmDiscard, titleVisibility: .visible) {
@@ -52,6 +56,9 @@ struct RecordingView: View {
         .interactiveDismissDisabled(true)
     }
 
+    /// Запись идёт, на паузе или прервана — экран «живой», можно отменить
+    private var isLive: Bool { rec.phase == .recording || rec.phase == .paused || rec.phase == .interrupted }
+
     private var header: some View {
         VStack(spacing: 6) {
             Text(rec.meeting?.templateEmoji ?? "🎙").font(.system(size: 40))
@@ -60,16 +67,13 @@ struct RecordingView: View {
         }
     }
 
-    private var timer: some View {
-        Text(Fmt.clock(rec.elapsed))
-            .font(.system(size: 64, weight: .light, design: .rounded).monospacedDigit())
-            .contentTransition(.numericText())
-    }
-
     @ViewBuilder private var statusLine: some View {
         switch rec.phase {
         case .recording:
-            Label("Идёт запись · экран можно заблокировать", systemImage: "record.circle").foregroundStyle(.red)
+            Label { Text("Идёт запись · экран можно заблокировать") } icon: {
+                Image(systemName: "record.circle").symbolEffect(.pulse, options: .repeating)
+            }
+            .foregroundStyle(.red)
         case .paused:
             Label("Пауза", systemImage: "pause.circle").foregroundStyle(.orange)
         case .interrupted:

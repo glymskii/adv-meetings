@@ -56,7 +56,7 @@ struct SettingsView: View {
                             if let e = m.finalizeError { Text(e).font(.caption2).foregroundStyle(.red) }
                         }
                     }
-                    .onDelete { idx in Task { for i in idx { await LocalStore.shared.remove(localMeetings[i].id) }; await reload() } }
+                    .onDelete { idx in Task { for i in idx { let id = localMeetings[i].id; await LocalStore.shared.remove(id); await UploadManager.shared.cancel(meetingId: id) }; await reload() } }
                     if localMeetings.contains(where: { $0.phase == .stopped }) {
                         Button("Повторить отправку незавершённых") { Task { await RecordingCoordinator.shared.resumePendingFinalizations(); await reload() } }
                     }

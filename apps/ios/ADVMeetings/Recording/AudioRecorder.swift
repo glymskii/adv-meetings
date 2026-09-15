@@ -1,6 +1,8 @@
+import Accelerate
 import AVFoundation
 import Foundation
 import os
+import QuartzCore
 
 /// Запись с микрофона через AVAudioEngine с ротацией файлов-сегментов без остановки движка.
 /// Выход: AAC 16 кГц mono 32 kbps в .m4a. Работает в фоне и при заблокированном экране (UIBackgroundModes: audio).
@@ -35,11 +37,13 @@ final class AudioRecorder {
 
     /// Вызывается (не на главном потоке) при закрытии сегмента
     var onSegmentClosed: ((ClosedSegment) -> Void)?
-    /// Уровень сигнала 0…1 (не на главном потоке, ~10 раз/с)
-    var onLevel: ((Float) -> Void)?
+    /// Огибающая сигнала окнами по `LevelHistory.window` с привязкой к медиа-времени (не на главном потоке, ~20 окон/с)
+    var onLevel: (([LevelHistory.Raw]) -> Void)?
     var onStateChanged: ((State) -> Void)?
 
-    private var levelAccumulator: (sum: Float, count: Int) = (0, 0)
+    /// Незакрытое окно огибающей (может тянуться через границу буферов); живёт только на аудиопотоке
+    private var levelWindow: (sumSq: Float, peak: Float, frames: Int, startMedia: Double) = (0, 0, 0, 0)
+    private var lastBufferEnd: Double = 0
 
     init(segmentDuration: TimeInterval = AppConfig.segmentDuration) {
         segmentFrames = AVAudioFramePosition(segmentDuration * 16_000)
@@ -118,8 +122,8 @@ final class AudioRecorder {
         conv.sampleRateConverterQuality = .max
         converter = conv
         input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buffer, _ in
-            self?.handle(buffer: buffer)
+        input.installTap(onBus: 0, bufferSize: 4096, format: fmt) { [weak self] buffer, when in
+            self?.handle(buffer: buffer, at: when)
         }
     }
 
@@ -136,9 +140,9 @@ final class AudioRecorder {
         }
     }
 
-    private func handle(buffer: AVAudioPCMBuffer) {
+    private func handle(buffer: AVAudioPCMBuffer, at when: AVAudioTime) {
         guard let converter, state == .recording else { return }
-        measureLevel(buffer)
+        measureLevel(buffer, at: when)
         let ratio = outputFormat.sampleRate / buffer.format.sampleRate
         let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
         guard let out = AVAudioPCMBuffer(pcmFormat: outputFormat, frameCapacity: capacity) else { return }
@@ -195,21 +199,34 @@ final class AudioRecorder {
         }
     }
 
-    private func measureLevel(_ buffer: AVAudioPCMBuffer) {
-        guard let ch = buffer.floatChannelData?[0] else { return }
+    /// RMS и пик по окнам фиксированной длины; время окна — от hostTime буфера, чтобы столбики ложились на шкалу записи точно.
+    private func measureLevel(_ buffer: AVAudioPCMBuffer, at when: AVAudioTime) {
+        guard let onLevel, let ch = buffer.floatChannelData?[0] else { return }
         let n = Int(buffer.frameLength)
         guard n > 0 else { return }
-        var sum: Float = 0
-        for i in 0..<n { sum += ch[i] * ch[i] }
-        let rms = sqrt(sum / Float(n))
-        let db = 20 * log10(max(rms, 1e-7))
-        let norm = max(0, min(1, (db + 50) / 50)) // -50 dB … 0 dB → 0 … 1
-        levelAccumulator.sum += norm
-        levelAccumulator.count += 1
-        if levelAccumulator.count >= 4 {
-            onLevel?(levelAccumulator.sum / Float(levelAccumulator.count))
-            levelAccumulator = (0, 0)
+        let sr = buffer.format.sampleRate
+        let start = when.isHostTimeValid ? AVAudioTime.seconds(forHostTime: when.hostTime) : CACurrentMediaTime() - Double(n) / sr
+        if start - lastBufferEnd > 0.25 { levelWindow = (0, 0, 0, 0) } // разрыв (пауза, звонок) — незакрытое окно не тянем
+        lastBufferEnd = start + Double(n) / sr
+        let windowFrames = max(1, Int(sr * LevelHistory.window))
+        var out: [LevelHistory.Raw] = []
+        var i = 0
+        while i < n {
+            if levelWindow.frames == 0 { levelWindow.startMedia = start + Double(i) / sr }
+            let len = min(n - i, windowFrames - levelWindow.frames)
+            var sumSq: Float = 0, peak: Float = 0
+            vDSP_svesq(ch + i, 1, &sumSq, vDSP_Length(len))
+            vDSP_maxmgv(ch + i, 1, &peak, vDSP_Length(len))
+            levelWindow.sumSq += sumSq
+            levelWindow.peak = max(levelWindow.peak, peak)
+            levelWindow.frames += len
+            i += len
+            if levelWindow.frames >= windowFrames {
+                out.append(.init(media: levelWindow.startMedia, rms: sqrt(levelWindow.sumSq / Float(levelWindow.frames)), peak: levelWindow.peak))
+                levelWindow = (0, 0, 0, 0)
+            }
         }
+        if !out.isEmpty { onLevel(out) }
     }
 
     private func setState(_ s: State) {

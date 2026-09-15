@@ -39,4 +39,6 @@ struct MainTabs: View {
 
 extension Notification.Name {
     static let openTasksTab = Notification.Name("kz.adv.meetings.openTasksTab")
+    /// Список встреч на сервере изменился не из списка (отмена записи, чистка оборванных записей при старте)
+    static let meetingsChanged = Notification.Name("kz.adv.meetings.meetingsChanged")
 }

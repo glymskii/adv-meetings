@@ -65,7 +65,11 @@ final class UploadManager: NSObject {
             var req = URLRequest(url: url)
             req.httpMethod = "PUT"
             for (k, v) in presigned.headers { req.setValue(v, forHTTPHeaderField: k) }
-            let task = session.uploadTask(with: req, fromFile: fileURL)
+            // Задача создаётся внутри actor'а LocalStore — атомарно относительно удаления файлов (отмена/удаление записи)
+            guard let task = await LocalStore.shared.withSegmentFile(seg, { self.session.uploadTask(with: req, fromFile: $0) }) else {
+                log.warning("segment \(seg.id) removed before upload — skip")
+                return
+            }
             task.taskDescription = "\(seg.meetingId)|\(seg.seq)|\(seg.durationSec)|\(seg.sizeBytes)"
             state.withLock { _ = $0.inFlight.insert(seg.id) }
             await LocalStore.shared.updateSegment(meetingId: seg.meetingId, seq: seg.seq) { $0.uploadState = .uploading; $0.attempts += 1 }
@@ -76,6 +80,13 @@ final class UploadManager: NSObject {
             await LocalStore.shared.updateSegment(meetingId: seg.meetingId, seq: seg.seq) { $0.uploadState = .failed; $0.lastError = error.localizedDescription }
             eventContinuation.yield(Event(meetingId: seg.meetingId, seq: seg.seq, state: .failed))
         }
+    }
+
+    /// Отмена загрузок встречи (отмена или удаление записи): снимает запущенные задачи; новые не появятся, т.к. записи
+    /// уже нет в LocalStore.
+    func cancel(meetingId: String) async {
+        for t in await session.allTasks where t.taskDescription?.hasPrefix("\(meetingId)|") == true { t.cancel() }
+        state.withLock { $0.inFlight = $0.inFlight.filter { !$0.hasPrefix("\(meetingId)/") } }
     }
 
     /// После перезапуска: сегменты со статусом uploading без живой задачи → pending.

@@ -16,7 +16,8 @@ final class RecordingCoordinator {
     private(set) var phase: Phase = .idle
     private(set) var meeting: LocalMeeting?
     private(set) var elapsed: TimeInterval = 0
-    private(set) var level: Float = 0
+    /// Часы записи и огибающая для визуализации (читается экраном записи напрямую, без прохода через @Observable)
+    let levels = LevelHistory()
     private(set) var uploadedSegments = 0
     private(set) var totalSegments = 0
     var isPresentingRecorder = false
@@ -26,9 +27,8 @@ final class RecordingCoordinator {
     private let log = Logger(subsystem: "kz.adv.meetings", category: "recording")
     private var recorder: AudioRecorder?
     private var timer: Timer?
-    private var startDate: Date?
-    private var pausedAccumulated: TimeInterval = 0
-    private var pauseStarted: Date?
+    /// Идёт отмена записи: закрывающийся последний сегмент не регистрируем и не загружаем
+    private var discarding = false
     private var activity: Activity<RecordingActivityAttributes>?
     private var uploadObserver: Task<Void, Never>?
     /// Встречи, финализация которых уже идёт (защита от двойного finalize из разных источников)
@@ -66,14 +66,14 @@ final class RecordingCoordinator {
         let dir = await LocalStore.shared.directory(for: local.id)
 
         let r = AudioRecorder()
-        r.onSegmentClosed = { [weak self] seg in Task { @MainActor in await self?.segmentClosed(seg) } }
-        r.onLevel = { [weak self] l in Task { @MainActor in self?.level = l } }
+        let meetingId = local.id
+        r.onSegmentClosed = { [weak self] seg in Task { @MainActor in await self?.segmentClosed(seg, meetingId: meetingId) } }
+        r.onLevel = { [levels] raw in levels.append(raw) } // прямо с аудиопотока, без прыжка на main
         r.onStateChanged = { [weak self] s in Task { @MainActor in self?.recorderStateChanged(s) } }
         recorder = r
-        try r.start(in: dir)
+        levels.begin()
+        do { try r.start(in: dir) } catch { levels.clear(); recorder = nil; throw error }
 
-        startDate = Date()
-        pausedAccumulated = 0
         elapsed = 0
         uploadedSegments = 0
         totalSegments = 0
@@ -87,7 +87,7 @@ final class RecordingCoordinator {
     func pause() {
         guard phase == .recording, let recorder else { return }
         recorder.pause()
-        pauseStarted = Date()
+        levels.pause()
         phase = .paused
         updateActivity()
     }
@@ -96,8 +96,7 @@ final class RecordingCoordinator {
         guard phase == .paused || phase == .interrupted, let recorder else { return }
         do {
             try recorder.resume()
-            if let p = pauseStarted { pausedAccumulated += Date().timeIntervalSince(p) }
-            pauseStarted = nil
+            levels.resume()
             phase = .recording
             updateActivity()
         } catch {
@@ -108,7 +107,7 @@ final class RecordingCoordinator {
 
     func addMarker(note: String?) {
         guard let meeting, isActive else { return }
-        let m = Marker(atSec: elapsed, note: note, createdAt: ISO8601DateFormatter.fractional.string(from: Date()))
+        let m = Marker(atSec: levels.now, note: note, createdAt: ISO8601DateFormatter.fractional.string(from: Date()))
         Task {
             if let updated = await LocalStore.shared.update(meeting.id, { $0.markers.append(m) }) { self.meeting = updated }
         }
@@ -119,6 +118,7 @@ final class RecordingCoordinator {
         phase = .stopping
         stopTimer()
         recorder.stop() // синхронно закрывает последний сегмент → segmentClosed
+        levels.freeze()
         self.recorder = nil
         let updated = await LocalStore.shared.update(meeting.id) { $0.phase = .stopped; $0.endedAt = Date() }
         self.meeting = updated
@@ -128,33 +128,45 @@ final class RecordingCoordinator {
         await tryFinalize(meetingId: meeting.id)
     }
 
-    /// Отмена записи: удаляет встречу на сервере и локальные файлы
+    /// Отмена записи: удаляет встречу на сервере и локальные файлы.
+    /// Порядок важен: сначала запись убирается из LocalStore (там же удаляются файлы — атомарно относительно создания
+    /// upload-задач), потом отменяются уже запущенные загрузки. Иначе фоновая URLSession получала файл, удалённый
+    /// между presign и созданием задачи, и падала с необрабатываемым исключением.
     func discard() async {
-        guard let meeting else { return }
-        recorder?.stop()
-        recorder = nil
+        guard let meeting, !discarding else { return }
+        discarding = true
+        defer { discarding = false }
+        phase = .stopping
         stopTimer()
+        recorder?.stop()
+        levels.freeze()
+        recorder = nil
         await endActivity()
         await LocalStore.shared.remove(meeting.id)
+        await UploadManager.shared.cancel(meetingId: meeting.id)
         try? await APIClient.shared.deleteMeeting(meeting.id)
         self.meeting = nil
+        levels.clear()
+        elapsed = 0
         phase = .idle
         isPresentingRecorder = false
+        NotificationCenter.default.post(name: .meetingsChanged, object: nil)
     }
 
     func reset() {
         meeting = nil
         phase = .idle
         elapsed = 0
-        level = 0
+        levels.clear()
         finalizedMeetingId = nil
         isPresentingRecorder = false
     }
 
     // MARK: Segments & upload
 
-    private func segmentClosed(_ seg: AudioRecorder.ClosedSegment) async {
-        guard let meeting else { return }
+    private func segmentClosed(_ seg: AudioRecorder.ClosedSegment, meetingId: String) async {
+        // Сегмент отменённой или уже другой записи не регистрируем (файлы отменённой записи удалены)
+        guard let meeting, meeting.id == meetingId, !discarding else { return }
         let local = LocalSegment(meetingId: meeting.id, seq: seg.seq, fileName: seg.url.lastPathComponent, durationSec: seg.durationSec, sizeBytes: seg.sizeBytes)
         if let updated = await LocalStore.shared.update(meeting.id, { $0.segments.append(local) }) {
             self.meeting = updated
@@ -203,16 +215,19 @@ final class RecordingCoordinator {
     /// После перезапуска: записи в фазе stopped/finalizing — дозагрузить и финализировать;
     /// записи, оборванные крашем в фазе recording — закрыть (есть сегменты) или удалить (пустые).
     func resumePendingFinalizations() async {
+        var changed = false
         for m in await LocalStore.shared.all() where m.phase == .recording {
             if m.segments.isEmpty {
                 log.warning("незавершённая пустая запись \(m.id) — удаляю")
                 await LocalStore.shared.remove(m.id)
                 try? await APIClient.shared.deleteMeeting(m.id)
+                changed = true
             } else {
                 log.warning("незавершённая запись \(m.id) с \(m.segments.count) сегментами — закрываю")
                 _ = await LocalStore.shared.update(m.id) { $0.phase = .stopped; $0.endedAt = $0.endedAt ?? Date() }
             }
         }
+        if changed { NotificationCenter.default.post(name: .meetingsChanged, object: nil) }
         await UploadManager.shared.kick()
         for m in await LocalStore.shared.all() where m.phase == .stopped || m.phase == .finalizing {
             if m.allUploaded {
@@ -277,7 +292,7 @@ final class RecordingCoordinator {
             guard phase == .recording else { return }
             log.warning("interruption began (звонок / Siri)")
             recorder?.markInterrupted()
-            pauseStarted = Date()
+            levels.pause()
             phase = .interrupted
             updateActivity()
         case .ended:
@@ -305,7 +320,7 @@ final class RecordingCoordinator {
     }
 
     private func recorderStateChanged(_ s: AudioRecorder.State) {
-        if s == .interrupted, phase == .recording { phase = .interrupted; pauseStarted = Date(); updateActivity() }
+        if s == .interrupted, phase == .recording { phase = .interrupted; levels.pause(); updateActivity() }
     }
 
     // MARK: Timer & activity
@@ -319,16 +334,7 @@ final class RecordingCoordinator {
 
     private func stopTimer() { timer?.invalidate(); timer = nil }
 
-    private func tick() {
-        guard let startDate else { return }
-        let pausedNow = pauseStarted.map { Date().timeIntervalSince($0) } ?? 0
-        elapsed = max(0, Date().timeIntervalSince(startDate) - pausedAccumulated - pausedNow)
-    }
-
-    private var timerStart: Date {
-        let pausedNow = pauseStarted.map { Date().timeIntervalSince($0) } ?? 0
-        return Date().addingTimeInterval(-elapsed - pausedNow + pausedNow)
-    }
+    private func tick() { elapsed = levels.now }
 
     private func startActivity(_ m: LocalMeeting) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
@@ -343,6 +349,7 @@ final class RecordingCoordinator {
 
     private func updateActivity() {
         guard let activity else { return }
+        elapsed = levels.now
         let isPaused = phase == .paused || phase == .interrupted
         let state = RecordingActivityAttributes.ContentState(
             timerStart: Date().addingTimeInterval(-elapsed),

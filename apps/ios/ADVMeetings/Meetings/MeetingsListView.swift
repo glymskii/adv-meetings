@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct MeetingsListView: View {
     @Environment(TemplateStore.self) private var templates
     @Environment(RecordingCoordinator.self) private var recorder
+    @Environment(\.scenePhase) private var scenePhase
     @State private var items: [MeetingSummary] = []
     @State private var query = ""
     @State private var loading = false
@@ -75,6 +76,8 @@ struct MeetingsListView: View {
                 await PushRegistrar.shared.sync()
                 PushRegistrar.shared.onOpenMeeting = { id in path.append(id) }
             }
+            .onReceive(NotificationCenter.default.publisher(for: .meetingsChanged)) { _ in Task { await load() } }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await load() } } }
             .onChange(of: recorder.finalizedMeetingId) { _, id in
                 if let id {
                     recorder.reset()

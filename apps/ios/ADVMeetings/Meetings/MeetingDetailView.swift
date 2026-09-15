@@ -47,7 +47,7 @@ struct MeetingDetailView: View {
         }
         .sheet(isPresented: $addingTask) { NewTaskView(meetingId: meetingId) { _ in await load() } }
         .confirmationDialog("Удалить встречу вместе с транскриптом и отчётом?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Удалить", role: .destructive) { Task { try? await APIClient.shared.deleteMeeting(meetingId); await LocalStore.shared.remove(meetingId); dismiss() } }
+            Button("Удалить", role: .destructive) { Task { try? await APIClient.shared.deleteMeeting(meetingId); await LocalStore.shared.remove(meetingId); await UploadManager.shared.cancel(meetingId: meetingId); dismiss() } }
         }
     }
 
