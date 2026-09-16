@@ -90,7 +90,7 @@ struct Marker: Codable, Hashable, Identifiable {
 }
 
 enum MeetingStatus: String, Codable {
-    case recording, uploading, queued, processing, transcribing, summarizing, done, failed
+    case recording, uploading, queued, processing, transcribing, transcribed, summarizing, done, failed
 
     var title: String {
         switch self {
@@ -99,6 +99,7 @@ enum MeetingStatus: String, Codable {
         case .queued: return "В очереди"
         case .processing: return "Подготовка аудио"
         case .transcribing: return "Транскрибация"
+        case .transcribed: return "Расшифровка готова"
         case .summarizing: return "Составление отчёта"
         case .done: return "Готово"
         case .failed: return "Ошибка"
@@ -181,6 +182,39 @@ struct TranscriptSegment: Codable, Hashable, Identifiable {
     let text: String
 }
 
+/// Предположение ИИ о спикере после расшифровки — пользователь подтверждает или меняет
+struct SpeakerSuggestion: Codable, Hashable, Identifiable {
+    let speakerId: String
+    let name: String?
+    let role: String?
+    let company: String?
+    let side: String // ours | client | vendor | unknown
+    let confidence: String // high | medium | low
+    let evidence: String?
+    /// id другого спикера, если это, скорее всего, тот же человек (дубль диаризации)
+    let sameAs: String?
+    var id: String { speakerId }
+
+    var sideRole: SpeakerRole? { SpeakerRole(rawValue: side) }
+    var confidenceTitle: String {
+        switch confidence {
+        case "high": return "уверенно"
+        case "medium": return "вероятно"
+        default: return "неуверенно"
+        }
+    }
+}
+
+struct SpeakerSuggestions: Codable, Hashable {
+    let estimatedSpeakerCount: Int
+    let speakers: [SpeakerSuggestion]
+    let notes: String?
+    let model: String
+    let createdAt: String
+
+    func suggestion(for speakerId: String) -> SpeakerSuggestion? { speakers.first { $0.speakerId == speakerId } }
+}
+
 struct Transcript: Codable, Hashable {
     let id: String
     let provider: String
@@ -190,6 +224,8 @@ struct Transcript: Codable, Hashable {
     let selfSpeakerId: String?
     let speakerRoles: [String: SpeakerRole]
     let speakerIds: [String]
+    var speakerSuggestions: SpeakerSuggestions? = nil
+    var speakersConfirmed: Bool = false
     let audioDurationSec: Double?
     let wordCount: Int
     let createdAt: Date
@@ -470,7 +506,8 @@ enum DateOnly {
 }
 
 struct CreateMeetingBody: Encodable {
-    var templateId: String
+    /// nil — быстрая запись: тип встречи выбирается во время записи или после расшифровки
+    var templateId: String?
     var title: String?
     var source: String = "recorded"
     var startedAt: String?
@@ -484,6 +521,7 @@ struct CreateMeetingBody: Encodable {
 }
 
 struct UpdateMeetingBody: Encodable {
+    var templateId: String?
     var title: String?
     var contextFields: [String: ContextValue]?
     var participantsHint: [Participant]?
@@ -491,6 +529,7 @@ struct UpdateMeetingBody: Encodable {
     var languageHint: String?
     var platform: String?
     var markers: [Marker]?
+    var confidentiality: String?
 }
 
 struct SegmentRequestBody: Encodable {
@@ -525,10 +564,16 @@ struct SpeakersBody: Encodable {
     let speakers: [String: String]
     var selfSpeakerId: String?? = nil
     var speakerRoles: [String: SpeakerRole]? = nil
-    enum CodingKeys: String, CodingKey { case speakers, selfSpeakerId, speakerRoles }
+    /// Слияние дублей диаризации: { "speaker_5": "speaker_2" }
+    var merges: [String: String]? = nil
+    /// Пользователь проверил спикеров после расшифровки
+    var confirmed: Bool? = nil
+    enum CodingKeys: String, CodingKey { case speakers, selfSpeakerId, speakerRoles, merges, confirmed }
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(speakers, forKey: .speakers)
+        try c.encodeIfPresent(merges, forKey: .merges)
+        try c.encodeIfPresent(confirmed, forKey: .confirmed)
         if let v = selfSpeakerId { try c.encode(v, forKey: .selfSpeakerId) }
         if let r = speakerRoles { try c.encode(r, forKey: .speakerRoles) }
     }

@@ -56,6 +56,29 @@ export type SpeakerMap = Record<string, string>;
 export type SpeakerRole = "ours" | "client" | "vendor";
 export type SpeakerRoleMap = Record<string, SpeakerRole>;
 
+/** Предположение о спикере после расшифровки (LLM) */
+export interface SpeakerSuggestion {
+  speakerId: string;
+  /** имя, если оно прозвучало в разговоре или есть в списке участников */
+  name: string | null;
+  role: string | null;
+  company: string | null;
+  side: SpeakerRole | "unknown";
+  confidence: "high" | "medium" | "low";
+  /** на чём основано предположение — короткая цитата или объяснение */
+  evidence: string | null;
+  /** id другого спикера, если это, судя по всему, тот же человек (диаризация разделила одного говорящего) */
+  sameAs: string | null;
+}
+
+export interface SpeakerSuggestions {
+  estimatedSpeakerCount: number;
+  speakers: SpeakerSuggestion[];
+  notes: string | null;
+  model: string;
+  createdAt: string;
+}
+
 export interface ReportSection {
   key: string;
   heading: string;

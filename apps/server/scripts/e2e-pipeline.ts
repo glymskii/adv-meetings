@@ -24,8 +24,8 @@ if (!file) {
 const cfg = config();
 const d = db();
 
-// Тестовый пользователь
-const email = "e2e@adv.local";
+// Тестовый пользователь (E2E_OWNER_EMAIL — чтобы встреча появилась у нужного аккаунта в приложении)
+const email = process.env.E2E_OWNER_EMAIL ?? "e2e@adv.local";
 let [u] = await d.select().from(user).where(eq(user.email, email)).limit(1);
 if (!u) {
   [u] = await d.insert(user).values({ id: "e2e-user", name: "E2E", email, emailVerified: true, role: "member" }).returning();
@@ -69,6 +69,10 @@ const usage = await d.select().from(usageEvents).where(eq(usageEvents.meetingId,
 const leftover = await listKeys(`meetings/${m!.id}/`);
 
 console.log(`\n■ статус: ${mm!.status}${mm!.error ? " — " + mm!.error : ""}  |  время пайплайна: ${(total / 1000).toFixed(1)} с`);
+if (tr?.speakerSuggestions) {
+  const sg = tr.speakerSuggestions;
+  console.log(`■ спикеры (ИИ, ${sg.model}): реально ${sg.estimatedSpeakerCount}; ${sg.speakers.map((x) => `${x.speakerId}→${x.name ?? "?"}/${x.side}/${x.confidence}${x.sameAs ? " =" + x.sameAs : ""}`).join(", ")}${sg.notes ? " | " + sg.notes : ""}`);
+}
 if (tr) {
   const speakers = new Set(tr.segments.map((s) => s.speakerId)).size;
   console.log(`■ транскрипт: ${tr.provider}, язык ${tr.languageCode} (${tr.languageProbability}), ${tr.wordCount} слов, ${tr.segments.length} сегментов, ${speakers} спикеров, длительность ${tr.audioDurationSec} с, cost $${tr.costUsd}`);
@@ -83,4 +87,4 @@ if (rep) {
 console.log(`■ usage: ${usage.map((x) => `${x.kind}=$${x.costUsd}`).join(", ")}  |  объектов в bucket после пайплайна: ${leftover.length} ${leftover.length === 0 ? "✓" : "✗ " + leftover.join(",")}`);
 
 await closeDb();
-process.exit(mm!.status === "done" && leftover.length === 0 ? 0 : 2);
+process.exit((mm!.status === "done" || mm!.status === "transcribed") && leftover.length === 0 ? 0 : 2);

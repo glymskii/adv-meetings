@@ -33,15 +33,12 @@ targets:
       - target: ADVMeetingsWidgets
         embed: true
         codeSign: true
-      - target: ADVMeetingsBroadcast
-        embed: true
-        codeSign: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: kz.adv.meetings
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_FILE: ADVMeetings/Resources/Info.plist
-        CODE_SIGN_ENTITLEMENTS: ADVMeetings/Resources/ADVMeetings.entitlements
+        CODE_SIGN_ENTITLEMENTS: ADVMeetings/Resources/ADVMeetings-lite.entitlements
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SUPPORTS_MACCATALYST: NO
@@ -97,31 +94,6 @@ targets:
         CFBundleDevelopmentRegion: ru
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
-  ADVMeetingsBroadcast:
-    type: app-extension
-    platform: iOS
-    sources:
-      - path: ADVMeetingsBroadcast
-      - path: ADVMeetings/Recording/BroadcastSession.swift
-    settings:
-      base:
-        PRODUCT_BUNDLE_IDENTIFIER: kz.adv.meetings.broadcast
-        TARGETED_DEVICE_FAMILY: "1"
-        INFOPLIST_FILE: ADVMeetingsBroadcast/Info.plist
-        CODE_SIGN_ENTITLEMENTS: ADVMeetingsBroadcast/ADVMeetingsBroadcast.entitlements
-        SKIP_INSTALL: YES
-    info:
-      path: ADVMeetingsBroadcast/Info.plist
-      properties:
-        CFBundleDisplayName: Запись встречи
-        CFBundleShortVersionString: $(MARKETING_VERSION)
-        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
-        CFBundleDevelopmentRegion: ru
-        NSExtension:
-          NSExtensionPointIdentifier: com.apple.broadcast-services-upload
-          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).SampleHandler
-          NSExtensionAttributes:
-            RPBroadcastProcessMode: RPBroadcastProcessModeSampleBuffer
 schemes:
   ADVMeetings:
     build:

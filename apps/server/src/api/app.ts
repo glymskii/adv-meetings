@@ -28,7 +28,8 @@ export function createApp() {
     const started = Date.now();
     await next();
     if (c.req.path !== "/health") {
-      logger.info({ method: c.req.method, path: c.req.path, status: c.res.status, ms: Date.now() - started, reqId: c.get("requestId") }, "http");
+      const user = (c as unknown as { get(k: "user"): { id?: string; email?: string } | undefined }).get("user");
+      logger.info({ method: c.req.method, path: c.req.path, status: c.res.status, ms: Date.now() - started, reqId: c.get("requestId"), user: user?.email ?? undefined }, "http");
     }
   });
   app.use("/api/*", cors({ origin: [cfg.BASE_URL], credentials: true, allowHeaders: ["Authorization", "Content-Type"], exposeHeaders: ["set-auth-token"] }));

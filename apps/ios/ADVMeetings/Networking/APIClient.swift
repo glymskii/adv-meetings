@@ -164,8 +164,8 @@ extension APIClient {
     }
     func finalize(meetingId: String, body: FinalizeBody) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/finalize", body: body) }
     func retry(meetingId: String) async throws -> MeetingSummary { try await request("POST", "/api/meetings/\(meetingId)/retry", body: EmptyBody()) }
-    func renameSpeakers(meetingId: String, speakers: [String: String], selfSpeakerId: String?? = nil, speakerRoles: [String: SpeakerRole]? = nil) async throws -> MeetingDetail {
-        try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers, selfSpeakerId: selfSpeakerId, speakerRoles: speakerRoles))
+    func renameSpeakers(meetingId: String, speakers: [String: String], selfSpeakerId: String?? = nil, speakerRoles: [String: SpeakerRole]? = nil, merges: [String: String]? = nil, confirmed: Bool? = nil) async throws -> MeetingDetail {
+        try await request("PATCH", "/api/meetings/\(meetingId)/speakers", body: SpeakersBody(speakers: speakers, selfSpeakerId: selfSpeakerId, speakerRoles: speakerRoles, merges: merges, confirmed: confirmed))
     }
     func users(query: String? = nil) async throws -> [AccountUser] {
         var q: [URLQueryItem] = []

@@ -25,7 +25,7 @@ export interface ProcessMeetingJob {
 
 export interface NotifyJob {
   meetingId: string;
-  kind: "report_ready" | "failed";
+  kind: "report_ready" | "transcript_ready" | "failed";
 }
 
 let boss: PgBoss | null = null;

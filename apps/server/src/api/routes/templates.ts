@@ -1,5 +1,5 @@
 import { OpenAPIHono, createRoute } from "@hono/zod-openapi";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, ne } from "drizzle-orm";
 import { db } from "../../db/client.js";
 import { meetingTemplates } from "../../db/schema/index.js";
 import { catalog } from "../../templates/catalog.js";
@@ -19,7 +19,8 @@ templatesRoutes.openapi(
     responses: { 200: { description: "OK", content: { "application/json": { schema: TemplatesResponse } } } },
   }),
   async (c) => {
-    const rows = await db().select().from(meetingTemplates).where(eq(meetingTemplates.isActive, true)).orderBy(asc(meetingTemplates.sortOrder), asc(meetingTemplates.version));
+    // Системные шаблоны (запись без типа) в выборе типа не показываем
+    const rows = await db().select().from(meetingTemplates).where(and(eq(meetingTemplates.isActive, true), ne(meetingTemplates.group, "system"))).orderBy(asc(meetingTemplates.sortOrder), asc(meetingTemplates.version));
     const latest = new Map<string, (typeof rows)[number]>();
     for (const r of rows) {
       const cur = latest.get(r.code);

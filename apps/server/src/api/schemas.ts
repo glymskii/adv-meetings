@@ -71,11 +71,12 @@ export const ParticipantSchema = z
 
 export const MarkerSchema = z.object({ atSec: z.number().min(0), note: z.string().nullable().optional(), createdAt: z.string() }).openapi("Marker");
 
-export const MeetingStatus = z.enum(["recording", "uploading", "queued", "processing", "transcribing", "summarizing", "done", "failed"]).openapi("MeetingStatus");
+export const MeetingStatus = z.enum(["recording", "uploading", "queued", "processing", "transcribing", "transcribed", "summarizing", "done", "failed"]).openapi("MeetingStatus");
 
 export const CreateMeetingBody = z
   .object({
-    templateId: z.string().uuid(),
+    /** Без templateId — быстрая запись: тип встречи выбирается после расшифровки */
+    templateId: z.string().uuid().optional(),
     title: z.string().max(200).optional(),
     source: z.enum(["recorded", "imported"]).default("recorded"),
     startedAt: z.string().datetime({ offset: true }).optional(),
@@ -91,6 +92,8 @@ export const CreateMeetingBody = z
 
 export const UpdateMeetingBody = z
   .object({
+    /** Тип встречи (можно задать во время записи или после расшифровки) */
+    templateId: z.string().uuid().optional(),
     title: z.string().max(200).optional(),
     contextFields: z.record(z.string(), z.union([z.string(), z.array(z.string()), z.number(), z.null()])).optional(),
     participantsHint: z.array(ParticipantSchema).optional(),
@@ -130,6 +133,29 @@ export const MeetingSummarySchema = z
 
 export const TranscriptSegmentSchema = z.object({ start: z.number(), end: z.number(), speakerId: z.string(), text: z.string() }).openapi("TranscriptSegment");
 
+export const SpeakerSuggestionSchema = z
+  .object({
+    speakerId: z.string(),
+    name: z.string().nullable(),
+    role: z.string().nullable(),
+    company: z.string().nullable(),
+    side: z.enum(["ours", "client", "vendor", "unknown"]),
+    confidence: z.enum(["high", "medium", "low"]),
+    evidence: z.string().nullable(),
+    sameAs: z.string().nullable(),
+  })
+  .openapi("SpeakerSuggestion");
+
+export const SpeakerSuggestionsSchema = z
+  .object({
+    estimatedSpeakerCount: z.number().int(),
+    speakers: z.array(SpeakerSuggestionSchema),
+    notes: z.string().nullable(),
+    model: z.string(),
+    createdAt: z.string(),
+  })
+  .openapi("SpeakerSuggestions");
+
 export const TranscriptSchema = z
   .object({
     id: z.string().uuid(),
@@ -140,6 +166,10 @@ export const TranscriptSchema = z
     selfSpeakerId: z.string().nullable(),
     speakerRoles: z.record(z.string(), z.enum(["ours", "client", "vendor"])),
     speakerIds: z.array(z.string()),
+    /** Предположения ИИ о спикерах (кто есть кто, дубли) — до подтверждения пользователем */
+    speakerSuggestions: SpeakerSuggestionsSchema.nullable(),
+    /** Подтвердил ли владелец спикеров после расшифровки */
+    speakersConfirmed: z.boolean(),
     audioDurationSec: z.number().nullable(),
     wordCount: z.number().int(),
     createdAt: z.string(),
@@ -246,6 +276,10 @@ export const SpeakersBody = z
     selfSpeakerId: z.string().max(40).nullable().optional(),
     /** Роли спикеров: ours / client / vendor (отсутствие ключа = не задана) */
     speakerRoles: z.record(z.string(), z.enum(["ours", "client", "vendor"])).optional(),
+    /** Слияние спикеров: { "speaker_5": "speaker_2" } — реплики speaker_5 становятся репликами speaker_2 (дубль диаризации) */
+    merges: z.record(z.string(), z.string()).optional(),
+    /** Пользователь проверил спикеров после расшифровки */
+    confirmed: z.boolean().optional(),
   })
   .openapi("SpeakersBody");
 

@@ -5,6 +5,8 @@
  *   tsx scripts/asc.ts testers                — список бета-тестеров
  *   tsx scripts/asc.ts add <groupId> <email>  — добавить тестера в группу (внешние группы)
  *   tsx scripts/asc.ts crashes [n]            — крэш-фидбек из TestFlight: список и текст n последних крэш-логов (по умолчанию 1)
+ *   tsx scripts/asc.ts bundle-ids             — App ID команды с включёнными capabilities
+ *   tsx scripts/asc.ts app-groups <bundleId…> — зарегистрировать App ID (если нет) и включить capability App Groups
  * Нужны переменные ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH (или ~/Documents/asc-api.json), ASC_APP_ID.
  */
 import { readFileSync } from "node:fs";
@@ -78,6 +80,26 @@ if (cmd === "builds") {
     const text: string = attrs.logText ?? (attrs.url ? await (await fetch(attrs.url)).text() : JSON.stringify(log).slice(0, 800));
     console.log(`\n===== crash log ${c.id} (${text.length} bytes) =====\n${text}`);
   }
+} else if (cmd === "bundle-ids") {
+  const r = await api("GET", `/bundleIds?filter[platform]=IOS&limit=50&include=bundleIdCapabilities&fields[bundleIdCapabilities]=capabilityType`);
+  for (const b of r.data) {
+    const caps = (b.relationships?.bundleIdCapabilities?.data ?? []).map((c: any) => r.included?.find((i: any) => i.id === c.id)?.attributes?.capabilityType).filter(Boolean);
+    console.log(`${b.id} — ${b.attributes.identifier} — ${b.attributes.name} — [${caps.join(", ")}]`);
+  }
+} else if (cmd === "app-groups") {
+  for (const identifier of args) {
+    const existing = await api("GET", `/bundleIds?filter[identifier]=${encodeURIComponent(identifier)}&filter[platform]=IOS&include=bundleIdCapabilities&fields[bundleIdCapabilities]=capabilityType`);
+    let b = existing.data.find((x: any) => x.attributes.identifier === identifier);
+    if (!b) {
+      const created = await api("POST", "/bundleIds", { data: { type: "bundleIds", attributes: { identifier, name: identifier.replace(/[^A-Za-z0-9 ]/g, " ").trim(), platform: "IOS" } } });
+      b = created.data;
+      console.log(`зарегистрирован App ID ${identifier} (${b.id})`);
+    }
+    const caps = (b.relationships?.bundleIdCapabilities?.data ?? []).map((c: any) => existing.included?.find((i: any) => i.id === c.id)?.attributes?.capabilityType);
+    if (caps.includes("APP_GROUPS")) { console.log(`${identifier}: App Groups уже включены`); continue; }
+    await api("POST", "/bundleIdCapabilities", { data: { type: "bundleIdCapabilities", attributes: { capabilityType: "APP_GROUPS" }, relationships: { bundleId: { data: { type: "bundleIds", id: b.id } } } } });
+    console.log(`${identifier}: capability App Groups включена`);
+  }
 } else {
-  console.log("команды: builds | group [name] | testers | add <groupId> <email> [first] [last] | crashes [n]");
+  console.log("команды: builds | group [name] | testers | add <groupId> <email> [first] [last] | crashes [n] | bundle-ids | app-groups <bundleId…>");
 }

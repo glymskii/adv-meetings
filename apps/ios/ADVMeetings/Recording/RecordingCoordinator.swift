@@ -57,10 +57,13 @@ final class RecordingCoordinator {
 
     // MARK: Start / pause / stop
 
-    func start(serverMeeting: MeetingSummary, template: MeetingTemplate) async throws {
+    /// Тип встречи не выбран — быстрая запись; тип задаётся во время записи или после расшифровки
+    static let unclassifiedTemplateCode = "unclassified"
+
+    func start(serverMeeting: MeetingSummary, template: MeetingTemplate?) async throws {
         guard phase == .idle || phase == .finished else { return }
         try await ensureMicPermission()
-        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template.id, templateTitle: template.title, templateEmoji: template.emoji, startedAt: Date())
+        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template?.id ?? serverMeeting.templateId, templateTitle: template?.title ?? serverMeeting.templateTitle, templateEmoji: template?.emoji ?? serverMeeting.templateEmoji, templateCode: template?.code ?? serverMeeting.templateCode, startedAt: Date())
         await LocalStore.shared.upsert(local)
         meeting = local
         let dir = await LocalStore.shared.directory(for: local.id)
@@ -104,6 +107,20 @@ final class RecordingCoordinator {
             phase = .failed("Не удалось продолжить запись: \(error.localizedDescription)")
         }
     }
+
+    /// Тип встречи выбран во время записи: обновляем заголовок и эмодзи на экране записи и в Live Activity
+    func applyTemplate(_ t: MeetingTemplate, title: String) {
+        guard let meeting else { return }
+        Task {
+            if let updated = await LocalStore.shared.update(meeting.id, { $0.templateId = t.id; $0.templateTitle = t.title; $0.templateEmoji = t.emoji; $0.templateCode = t.code; $0.title = title }) {
+                self.meeting = updated
+                updateActivity()
+            }
+        }
+    }
+
+    /// Тип встречи ещё не выбран
+    var isUnclassified: Bool { meeting?.templateCode == Self.unclassifiedTemplateCode }
 
     func addMarker(note: String?) {
         guard let meeting, isActive else { return }
@@ -237,8 +254,8 @@ final class RecordingCoordinator {
     }
 
     /// Импорт готового аудио/видео файла (Zoom, Teams, диктофон): копируем в локальную папку встречи как сегмент 0 и отправляем.
-    func importFile(_ sourceURL: URL, serverMeeting: MeetingSummary, template: MeetingTemplate) async throws {
-        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template.id, templateTitle: template.title, templateEmoji: template.emoji, startedAt: Date(), endedAt: Date(), phase: .stopped)
+    func importFile(_ sourceURL: URL, serverMeeting: MeetingSummary, template: MeetingTemplate?) async throws {
+        let local = LocalMeeting(id: serverMeeting.id, title: serverMeeting.title, templateId: template?.id ?? serverMeeting.templateId, templateTitle: template?.title ?? serverMeeting.templateTitle, templateEmoji: template?.emoji ?? serverMeeting.templateEmoji, templateCode: template?.code ?? serverMeeting.templateCode, startedAt: Date(), endedAt: Date(), phase: .stopped)
         await LocalStore.shared.upsert(local)
         let dir = await LocalStore.shared.directory(for: local.id)
         let ext = sourceURL.pathExtension.isEmpty ? "m4a" : sourceURL.pathExtension.lowercased()

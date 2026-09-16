@@ -18,6 +18,7 @@ struct MeetingDetailView: View {
     @State private var editingTask: TaskItem?
     @State private var addingTask = false
     @State private var editingReport = false
+    @State private var showReview = false
 
     enum Tab: String, CaseIterable { case report = "Отчёт", transcript = "Транскрипт", info = "Инфо" }
 
@@ -39,6 +40,7 @@ struct MeetingDetailView: View {
         .sheet(item: $exportURL) { url in ShareSheet(items: [url]) }
         .sheet(isPresented: $showRegenerate) { if let d = detail { RegenerateSheet(detail: d) { watchGeneration += 1 } } }
         .sheet(isPresented: $showShare) { if let d = detail { SharesSheet(meetingId: d.id) } }
+        .sheet(isPresented: $showReview) { if let d = detail { ReviewFlowView(detail: d) { watchGeneration += 1 } } }
         .sheet(item: $editingTask) { t in TaskEditorView(task: t) { _ in await load() } }
         .sheet(isPresented: $editingReport) {
             if let d = detail, let r = d.report {
@@ -55,6 +57,8 @@ struct MeetingDetailView: View {
         VStack(spacing: 0) {
             if d.status.isInProgress || d.status == .failed || d.status == .recording {
                 ProcessingBanner(detail: d) { Task { await retry() } }
+            } else if d.status == .transcribed, d.isOwner {
+                TranscribedBanner(detail: d) { showReview = true }
             }
             if d.hasReport || d.hasTranscript {
                 Picker("", selection: $tab) {
@@ -67,6 +71,15 @@ struct MeetingDetailView: View {
             case .report:
                 if let r = d.report {
                     ReportView(report: r, meeting: d, tasks: d.tasks, onToggleTask: { t in await toggleTask(t) }, onEditTask: { editingTask = $0 }, onAddTask: { addingTask = true }, onEditReport: { editingReport = true }, onAIFix: { showRegenerate = true })
+                }
+                else if d.status == .transcribed {
+                    ContentUnavailableView {
+                        Label("Расшифровка готова", systemImage: "text.badge.checkmark")
+                    } description: {
+                        Text(d.isOwner ? "Проверьте, кто говорил, выберите тип встречи — и отчёт будет готов через пару минут. Транскрипт уже доступен во вкладке рядом." : "Владелец ещё не сформировал отчёт. Транскрипт — во вкладке рядом.")
+                    } actions: {
+                        if d.isOwner { Button("Проверить спикеров и сформировать отчёт") { showReview = true }.buttonStyle(.borderedProminent) }
+                    }
                 }
                 else if !d.status.isInProgress { ContentUnavailableView("Отчёта пока нет", systemImage: "doc.text", description: Text(d.status == .failed ? (d.error ?? "Обработка не удалась") : "Отчёт появится после обработки записи.")) }
                 else { Spacer() }
@@ -96,7 +109,11 @@ struct MeetingDetailView: View {
                     Button { Task { await export("txt") } } label: { Label("Транскрипт (.txt)", systemImage: "text.quote") }
                 }
                 if detail?.hasTranscript == true && detail?.isOwner == true {
-                    Button { showRegenerate = true } label: { Label("Исправить / пересобрать отчёт…", systemImage: "wand.and.stars") }
+                    if detail?.status == .transcribed {
+                        Button { showReview = true } label: { Label("Проверить спикеров и сформировать отчёт…", systemImage: "person.2.badge.gearshape") }
+                    } else {
+                        Button { showRegenerate = true } label: { Label("Исправить / пересобрать отчёт…", systemImage: "wand.and.stars") }
+                    }
                 }
                 if detail?.isOwner == true {
                     Button { showShare = true } label: { Label("Поделиться с коллегой", systemImage: "person.badge.plus") }
@@ -121,7 +138,7 @@ struct MeetingDetailView: View {
             for try await ev in APIClient.shared.statusEvents(meetingId: meetingId) {
                 if Task.isCancelled { return }
                 await load()
-                if ev.status == .done || ev.status == .failed { return }
+                if ev.status == .done || ev.status == .failed || ev.status == .transcribed { return }
             }
         } catch {
             if Task.isCancelled { return }
@@ -151,7 +168,7 @@ struct MeetingDetailView: View {
     }
 
     private func toggleTask(_ t: TaskItem) async {
-        guard t.isOwner, var d = detail else { return }
+        guard var d = detail else { return }
         do {
             let updated = try await APIClient.shared.updateTask(t.id, TaskPatch(status: t.isDone ? .open : .done))
             var list = d.tasks
@@ -185,6 +202,41 @@ struct ProcessingBanner: View {
         }
         .padding(12)
         .background(Color(.secondarySystemBackground))
+    }
+}
+
+/// Расшифровка готова, отчёта ещё нет: владелец проверяет спикеров и выбирает тип встречи
+struct TranscribedBanner: View {
+    let detail: MeetingDetail
+    let onReview: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "text.badge.checkmark").foregroundStyle(.green).font(.title3)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Расшифровка готова").font(.subheadline.weight(.semibold))
+                    Text(hint).font(.caption).foregroundStyle(.secondary)
+                }
+            }
+            Button(action: onReview) {
+                Label("Проверить спикеров и выбрать тип встречи", systemImage: "arrow.right.circle.fill").font(.subheadline.weight(.medium)).frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent).controlSize(.small)
+        }
+        .padding(12)
+        .background(Color(.secondarySystemBackground))
+    }
+    private var hint: String {
+        guard let t = detail.transcript else { return "Чтобы получить отчёт, выберите тип встречи." }
+        if let s = t.speakerSuggestions {
+            let diarized = t.speakerIds.count
+            let dup = s.speakers.filter { $0.sameAs != nil }.count
+            var parts = ["ИИ насчитал \(s.estimatedSpeakerCount) участников"]
+            if diarized > s.estimatedSpeakerCount { parts.append("разделение выделило \(diarized)") }
+            if dup > 0 { parts.append("\(dup) возможных дубля — объедините") }
+            return parts.joined(separator: ", ") + ". Подтвердите, кто есть кто, и выберите тип встречи для отчёта."
+        }
+        return "Подтвердите, кто говорил (\(t.speakerIds.count) спикеров), и выберите тип встречи для отчёта."
     }
 }
 

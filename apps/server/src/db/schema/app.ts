@@ -24,6 +24,7 @@ import type {
   ReportSection,
   SpeakerMap,
   SpeakerRoleMap,
+  SpeakerSuggestions,
   TemplateField,
   TemplateSection,
   TranscriptSegment,
@@ -35,6 +36,8 @@ export const meetingStatus = pgEnum("meeting_status", [
   "queued",
   "processing",
   "transcribing",
+  /** расшифровка готова, ждём подтверждения спикеров и выбора типа встречи (отчёт ещё не строился) */
+  "transcribed",
   "summarizing",
   "done",
   "failed",
@@ -178,6 +181,10 @@ export const transcripts = pgTable(
     selfSpeakerId: text("self_speaker_id"),
     /** роли спикеров: ours / client / vendor — для нумерации «Клиент 1, Клиент 2» и для отчёта */
     speakerRoles: jsonb("speaker_roles").$type<SpeakerRoleMap>().notNull().default({}),
+    /** предположения LLM после расшифровки: кто есть кто, дубли диаризации — пользователь подтверждает */
+    speakerSuggestions: jsonb("speaker_suggestions").$type<SpeakerSuggestions | null>(),
+    /** когда владелец подтвердил спикеров после расшифровки (имена, роли, слияния) */
+    speakersConfirmedAt: timestamp("speakers_confirmed_at", { withTimezone: true }),
     audioDurationSec: numeric("audio_duration_sec", { precision: 10, scale: 3 }),
     wordCount: integer("word_count").notNull().default(0),
     costUsd: numeric("cost_usd", { precision: 10, scale: 4 }),

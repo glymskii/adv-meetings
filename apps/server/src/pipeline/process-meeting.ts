@@ -7,6 +7,8 @@ import { logger } from "../logger.js";
 import { deleteObjects, getObjectBytes, objectKey, presignGet, putObject } from "../storage/s3.js";
 import { sttProvider, SttError } from "../stt/index.js";
 import { summarizeTranscript, SummarizeError, type Effort } from "../llm/summarize.js";
+import { analyzeSpeakers } from "../llm/speakers.js";
+import { UNCLASSIFIED_TEMPLATE_CODE } from "../db/seed.js";
 import { renderMarkdown } from "../export/markdown.js";
 import { concatToM4a, probeDuration, withTempDir, writeTemp } from "./audio.js";
 import { agencies } from "../db/schema/index.js";
@@ -180,6 +182,33 @@ export async function purgeAudio(meetingId: string): Promise<number> {
   return rows.length;
 }
 
+/** Шаг 3b: анализ спикеров (быстрая модель): кто есть кто, дубли диаризации. Предположения подтверждает пользователь.
+ * Ошибка шага пайплайн не роняет — без подсказок можно работать. Идемпотентен: если подсказки уже есть — пропуск. */
+async function analyzeSpeakersStep(meeting: Meeting) {
+  const d = db();
+  const [tr] = await d.select().from(transcripts).where(eq(transcripts.meetingId, meeting.id)).limit(1);
+  if (!tr || tr.speakerSuggestions) return;
+  await setStatus(meeting.id, "transcribing", "Определяем, кто есть кто");
+  try {
+    const { result, costUsd, usage } = await analyzeSpeakers(meeting, tr);
+    await d.update(transcripts).set({ speakerSuggestions: result }).where(eq(transcripts.id, tr.id));
+    await d.insert(usageEvents).values({
+      meetingId: meeting.id,
+      userId: meeting.ownerId,
+      agencyId: meeting.agencyId,
+      kind: "llm",
+      provider: "anthropic",
+      model: result.model,
+      amount: (usage.input + usage.output).toString(),
+      unit: "tokens",
+      costUsd: costUsd.toString(),
+      meta: { step: "speakers", ...usage, estimated: result.estimatedSpeakerCount },
+    });
+  } catch (e) {
+    logger.warn({ meetingId: meeting.id, err: (e as Error).message }, "Анализ спикеров не удался — продолжаем без подсказок");
+  }
+}
+
 /** Шаг 4: саммари → новая версия отчёта. */
 async function summarizeStep(meeting: Meeting, template: Template, opts: { effort?: Effort; model?: string; createdBy: "pipeline" | "regenerate"; instructions?: string }) {
   const d = db();
@@ -299,8 +328,18 @@ export async function processMeeting(job: ProcessMeetingJob): Promise<void> {
       // Транскрипт есть — аудио точно больше не нужно
       await purgeAudio(meetingId);
     }
-    const refreshed = (await loadMeeting(meetingId)).meeting;
-    await summarizeStep(refreshed, template, { effort: job.effort, model: job.model, createdBy: job.regenerate ? "regenerate" : "pipeline", instructions: job.instructions?.trim() || undefined });
+    await analyzeSpeakersStep((await loadMeeting(meetingId)).meeting);
+
+    // Тип встречи могли выбрать во время записи или расшифровки — берём актуальный шаблон встречи
+    const fresh = await loadMeeting(meetingId);
+    const current = job.templateId ? template : fresh.template;
+    if (current.code === UNCLASSIFIED_TEMPLATE_CODE) {
+      // Быстрая запись без типа: расшифровка готова, отчёт строится после того, как пользователь подтвердит спикеров и выберет тип
+      await setStatus(meetingId, "transcribed", "Расшифровка готова — проверьте спикеров и выберите тип встречи");
+      await enqueueNotify({ meetingId, kind: "transcript_ready" });
+      return;
+    }
+    await summarizeStep(fresh.meeting, current, { effort: job.effort, model: job.model, createdBy: job.regenerate ? "regenerate" : "pipeline", instructions: job.instructions?.trim() || undefined });
     await enqueueNotify({ meetingId, kind: "report_ready" });
   } catch (e) {
     const err = e as Error;

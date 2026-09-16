@@ -23,6 +23,8 @@ struct LocalMeeting: Codable, Hashable, Identifiable {
     var templateId: String
     var templateTitle: String
     var templateEmoji: String
+    /// Код шаблона; "unclassified" — тип встречи ещё не выбран
+    var templateCode: String?
     var startedAt: Date
     var endedAt: Date?
     var phase: Phase = .recording

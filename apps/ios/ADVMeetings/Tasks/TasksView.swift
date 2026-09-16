@@ -65,9 +65,7 @@ struct TasksView: View {
                                         }
                                     }
                                     .swipeActions(edge: .leading) {
-                                        if t.isOwner {
-                                            Button { Task { await toggle(t) } } label: { Label(t.isDone ? "Открыть" : "Готово", systemImage: t.isDone ? "arrow.uturn.backward" : "checkmark") }.tint(.green)
-                                        }
+                                        Button { Task { await toggle(t) } } label: { Label(t.isDone ? "Открыть" : "Готово", systemImage: t.isDone ? "arrow.uturn.backward" : "checkmark") }.tint(.green)
                                     }
                             }
                         } header: {

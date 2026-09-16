@@ -14,11 +14,11 @@ export interface Access {
 }
 
 /**
- * Правила доступа:
+ * Правила доступа к содержимому встречи (транскрипт, отчёт, задачи):
  * - владелец — полный доступ;
- * - получатель share — по scope;
- * - agency_admin — встречи своего агентства, кроме restricted;
- * - holding_admin — все встречи, кроме restricted.
+ * - получатель share — по scope (report / report_transcript).
+ * Роли agency_admin / holding_admin НЕ дают неявного доступа к чужим встречам: содержимое встреч видно только
+ * тем, с кем ими явно поделились. Роли остаются для административных функций (шаблоны, статистика).
  */
 export async function loadMeetingWithAccess(meetingId: string, user: SessionUser): Promise<Access> {
   const [m] = await db().select().from(meetings).where(eq(meetings.id, meetingId)).limit(1);
@@ -37,11 +37,6 @@ export async function loadMeetingWithAccess(meetingId: string, user: SessionUser
     )
     .limit(1);
   if (sh) return { meeting: m, isOwner: false, scope: sh.scope };
-
-  if (m.confidentiality !== "restricted") {
-    if (user.role === "holding_admin") return { meeting: m, isOwner: false, scope: "full" };
-    if (user.role === "agency_admin" && user.agencyId && m.agencyId === user.agencyId) return { meeting: m, isOwner: false, scope: "full" };
-  }
   throw new HTTPException(404, { message: "Встреча не найдена" });
 }
 

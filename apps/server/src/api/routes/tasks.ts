@@ -35,16 +35,13 @@ export function taskDto(t: Task, m: Pick<MeetingRow, "title" | "startedAt" | "ow
   };
 }
 
-/** Встречи, доступные пользователю: свои + расшаренные + (для админов) агентства/холдинга без restricted. */
+/** Встречи, доступные пользователю: свои + явно расшаренные (роли неявного доступа не дают — см. authz.ts). */
 function accessibleMeetingsWhere(u: { id: string; email: string; role: string; agencyId: string | null }) {
   const sharedIds = db()
     .select({ id: shares.meetingId })
     .from(shares)
     .where(and(or(eq(shares.recipientUserId, u.id), eq(shares.recipientEmail, u.email.toLowerCase())), or(isNull(shares.expiresAt), gt(shares.expiresAt, new Date()))));
-  const conds = [eq(meetings.ownerId, u.id), inArray(meetings.id, sharedIds)];
-  if (u.role === "holding_admin") conds.push(eq(meetings.confidentiality, "standard"));
-  else if (u.role === "agency_admin" && u.agencyId) conds.push(and(eq(meetings.agencyId, u.agencyId), eq(meetings.confidentiality, "standard"))!);
-  return or(...conds);
+  return or(eq(meetings.ownerId, u.id), inArray(meetings.id, sharedIds));
 }
 
 const emojiSql = sql<string>`(select emoji from meeting_templates mt where mt.id = "meetings"."template_id")`;

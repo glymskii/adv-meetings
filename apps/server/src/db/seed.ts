@@ -26,10 +26,46 @@ export async function seedAgencies() {
   logger.info({ count: AGENCIES.length }, "Агентства засеяны");
 }
 
-/** Upsert шаблонов версии 1 из packages/shared/templates.json. Версии > 1 (правки в админке) не трогаем. */
+/** Код системного шаблона «тип встречи ещё не выбран»: запись стартует без выбора типа, тип задаётся после расшифровки */
+export const UNCLASSIFIED_TEMPLATE_CODE = "unclassified";
+
+/** Системный шаблон для быстрой записи: не показывается в выборе типа, отчёт по нему не строится */
+function unclassifiedTemplate() {
+  return {
+    code: UNCLASSIFIED_TEMPLATE_CODE,
+    version: 1,
+    group: "system",
+    category: "operations",
+    title: "Без типа",
+    subtitle: "Тип встречи выбирается после расшифровки",
+    goal: "Запись без выбранного типа встречи",
+    reportTitle: "Заметки встречи",
+    emoji: "🎙",
+    color: "gray",
+    confidentiality: "standard" as const,
+    allowConfidentialityChoice: true,
+    slaHours: 48,
+    sendTo: null,
+    tone: null,
+    commonFields: catalog.commonFields,
+    specificFields: [],
+    reportSections: [],
+    rules: [],
+    tips: [],
+    sortOrder: 999,
+    isActive: true,
+    isDraft: false,
+  };
+}
+
+/** Upsert шаблонов версии 1 из packages/shared/templates.json + системный шаблон. Версии > 1 (правки в админке) не трогаем. */
 export async function seedTemplates() {
   const d = db();
   let i = 0;
+  const system = unclassifiedTemplate();
+  const existingSystem = await d.select({ id: meetingTemplates.id }).from(meetingTemplates).where(and(eq(meetingTemplates.code, system.code), eq(meetingTemplates.version, 1))).limit(1);
+  if (existingSystem[0]) await d.update(meetingTemplates).set(system).where(eq(meetingTemplates.id, existingSystem[0].id));
+  else await d.insert(meetingTemplates).values(system);
   for (const t of catalog.templates) {
     const group = groupOf(t.group);
     const values = {

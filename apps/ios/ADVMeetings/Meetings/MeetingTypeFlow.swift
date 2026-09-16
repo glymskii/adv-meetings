@@ -1,22 +1,48 @@
 import SwiftUI
 
-/// Три шага перед записью: с кем встреча → подтип → контекст (пропускаемый) → старт.
-@MainActor
-struct NewMeetingFlow: View {
+/// Выбор типа встречи и контекста для уже существующей записи. Запись всегда стартует без типа;
+/// тип задаётся с экрана записи (пока идёт встреча) или после расшифровки — на шаге «спикеры → тип → отчёт».
+struct MeetingTypeSheet: View {
     @Environment(TemplateStore.self) private var store
     @Environment(\.dismiss) private var dismiss
-    var importURL: URL? = nil
+    let meetingId: String
+    var initial: MeetingDetail? = nil
+    var actionTitle: String = "Сохранить"
+    let onDone: (MeetingTemplate, MeetingDetail) -> Void
 
     var body: some View {
         NavigationStack {
             GroupPickerView()
-                .navigationTitle(importURL == nil ? "С кем встреча?" : "Импорт: с кем встреча?")
+                .meetingTypeDestinations(meetingId: meetingId, initial: initial, actionTitle: actionTitle) { t, d in
+                    onDone(t, d)
+                    dismiss()
+                }
+                .navigationTitle("С кем встреча?")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } } }
-                .navigationDestination(for: TemplateGroup.self) { g in TemplatePickerView(group: g) }
-                .navigationDestination(for: MeetingTemplate.self) { t in ContextFormView(template: t, importURL: importURL) }
         }
         .task { await store.refresh() }
+    }
+}
+
+/// Назначения навигации выбора типа: группа → шаблон → контекст. Объявлять на корневом экране NavigationStack
+/// (внутри уже открытого экрана SwiftUI их не регистрирует).
+struct MeetingTypeDestinations: ViewModifier {
+    let meetingId: String
+    var initial: MeetingDetail?
+    var actionTitle: String
+    let onDone: (MeetingTemplate, MeetingDetail) -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .navigationDestination(for: TemplateGroup.self) { g in TemplatePickerView(group: g) }
+            .navigationDestination(for: MeetingTemplate.self) { t in ContextFormView(template: t, meetingId: meetingId, initial: initial, actionTitle: actionTitle, onDone: onDone) }
+    }
+}
+
+extension View {
+    func meetingTypeDestinations(meetingId: String, initial: MeetingDetail? = nil, actionTitle: String = "Сохранить", onDone: @escaping (MeetingTemplate, MeetingDetail) -> Void) -> some View {
+        modifier(MeetingTypeDestinations(meetingId: meetingId, initial: initial, actionTitle: actionTitle, onDone: onDone))
     }
 }
 
@@ -109,14 +135,16 @@ struct LabeledField: View {
     }
 }
 
-/// Контекст встречи: 2–3 ключевых поля (askBeforeRecording), участники, число спикеров, платформа.
+/// Контекст встречи: ключевые поля шаблона (askBeforeRecording), участники, число спикеров, платформа.
+/// Сохраняет тип и контекст в существующую встречу (PATCH) и отдаёт результат наверх.
 @MainActor
 struct ContextFormView: View {
     @Environment(TemplateStore.self) private var store
-    @Environment(RecordingCoordinator.self) private var recorder
-    @Environment(\.dismiss) private var dismiss
     let template: MeetingTemplate
-    var importURL: URL? = nil
+    let meetingId: String
+    var initial: MeetingDetail? = nil
+    var actionTitle: String = "Сохранить"
+    let onDone: (MeetingTemplate, MeetingDetail) -> Void
 
     @State private var values: [String: String] = [:]
     @State private var participants: [Participant] = []
@@ -128,6 +156,7 @@ struct ContextFormView: View {
     @State private var showAllFields = false
     @State private var busy = false
     @State private var error: String?
+    @State private var prefilled = false
 
     private var keyFields: [TemplateField] { template.specificFields.filter { $0.askBeforeRecording == true } }
     private var otherFields: [TemplateField] { template.specificFields.filter { $0.askBeforeRecording != true } }
@@ -197,18 +226,18 @@ struct ContextFormView: View {
 
             if let error { Section { ErrorBanner(message: error) } }
         }
-        .navigationTitle(importURL == nil ? "Перед записью" : "Импорт записи")
+        .navigationTitle("Контекст встречи")
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear(perform: prefill)
         .safeAreaInset(edge: .bottom) {
-            Button { Task { await start() } } label: {
+            Button { Task { await apply() } } label: {
                 HStack {
-                    if busy { ProgressView().tint(.white) } else { Image(systemName: importURL == nil ? "record.circle" : "square.and.arrow.up") }
-                    Text(importURL == nil ? "Начать запись" : "Отправить на обработку").font(.headline)
+                    if busy { ProgressView().tint(.white) } else { Image(systemName: "checkmark.circle") }
+                    Text(actionTitle).font(.headline)
                 }
                 .frame(maxWidth: .infinity).padding(.vertical, 8)
             }
             .buttonStyle(.borderedProminent)
-            .tint(importURL == nil ? .red : .accentColor)
             .disabled(busy)
             .padding(16)
             .background(.bar)
@@ -219,6 +248,25 @@ struct ContextFormView: View {
         Binding(get: { values[key] ?? "" }, set: { values[key] = $0 })
     }
 
+    /// Предзаполнение из встречи: контекст мог вводиться раньше (например, во время записи)
+    private func prefill() {
+        guard !prefilled, let d = initial else { return }
+        prefilled = true
+        for (k, v) in d.contextFields {
+            switch v {
+            case .string(let s): values[k] = s
+            case .number(let n): values[k] = n.truncatingRemainder(dividingBy: 1) == 0 ? String(Int(n)) : String(n)
+            case .list(let l): if k != "participants" { values[k] = l.joined(separator: ", ") }
+            case .null: break
+            }
+        }
+        participants = d.participantsHint
+        numSpeakers = d.numSpeakersHint ?? 0
+        platform = d.platform ?? ""
+        language = d.languageHint ?? "auto"
+        restricted = d.confidentiality == "restricted"
+    }
+
     private func addParticipant() {
         let parts = newParticipant.split(separator: "·").map { $0.trimmingCharacters(in: .whitespaces) }
         guard let name = parts.first, !name.isEmpty else { return }
@@ -226,34 +274,21 @@ struct ContextFormView: View {
         newParticipant = ""
     }
 
-    private func start() async {
+    private func apply() async {
         busy = true; error = nil
         defer { busy = false }
         var ctx: [String: ContextValue] = [:]
         for (k, v) in values where !v.trimmingCharacters(in: .whitespaces).isEmpty { ctx[k] = .string(v.trimmingCharacters(in: .whitespaces)) }
         if !participants.isEmpty { ctx["participants"] = .list(participants.map { [$0.name, $0.role, $0.company].compactMap { $0 }.joined(separator: " · ") }) }
         if !platform.isEmpty { ctx["platform"] = .string(platform) }
-        let body = CreateMeetingBody(
-            templateId: template.id,
-            title: importURL.map { $0.deletingPathExtension().lastPathComponent },
-            source: importURL == nil ? "recorded" : "imported",
-            contextFields: ctx,
-            participantsHint: participants,
-            numSpeakersHint: numSpeakers > 0 ? numSpeakers : nil,
-            languageHint: language == "auto" ? nil : language,
-            platform: platform.isEmpty ? nil : platform,
-            confidentiality: restricted ? "restricted" : nil,
-            deviceId: UIDevice.current.identifierForVendor?.uuidString
-        )
+        var body = UpdateMeetingBody(templateId: template.id, contextFields: ctx, participantsHint: participants, platform: platform.isEmpty ? nil : platform)
+        body.numSpeakersHint = numSpeakers > 0 ? numSpeakers : nil
+        body.languageHint = language == "auto" ? nil : language
+        if template.allowConfidentialityChoice { body.confidentiality = restricted ? "restricted" : "standard" }
         do {
-            let created = try await APIClient.shared.createMeeting(body)
+            let detail = try await APIClient.shared.updateMeeting(meetingId, body)
             store.markUsed(template)
-            if let importURL {
-                try await recorder.importFile(importURL, serverMeeting: created, template: template)
-            } else {
-                try await recorder.start(serverMeeting: created, template: template)
-            }
-            dismiss()
+            onDone(template, detail)
         } catch {
             self.error = error.localizedDescription
         }

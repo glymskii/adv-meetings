@@ -8,6 +8,7 @@ struct RecordingView: View {
     @State private var showMarkerSheet = false
     @State private var markerNote = ""
     @State private var confirmDiscard = false
+    @State private var showTypePicker = false
 
     var body: some View {
         NavigationStack {
@@ -36,6 +37,11 @@ struct RecordingView: View {
                 Button("Удалить запись", role: .destructive) { Task { await rec.discard() } }
                 Button("Продолжить запись", role: .cancel) {}
             }
+            .sheet(isPresented: $showTypePicker) {
+                if let id = rec.meeting?.id {
+                    MeetingTypeSheet(meetingId: id, actionTitle: "Сохранить") { t, d in rec.applyTemplate(t, title: d.title) }
+                }
+            }
             .sheet(isPresented: $showMarkerSheet) {
                 NavigationStack {
                     Form {
@@ -62,8 +68,19 @@ struct RecordingView: View {
     private var header: some View {
         VStack(spacing: 6) {
             Text(rec.meeting?.templateEmoji ?? "🎙").font(.system(size: 40))
-            Text(rec.meeting?.templateTitle ?? "Запись").font(.headline)
-            Text(rec.meeting?.title ?? "").font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center).lineLimit(2)
+            Text(rec.meeting?.title ?? "Запись").font(.headline).multilineTextAlignment(.center).lineLimit(2)
+            // Тип встречи можно выбрать прямо во время записи — тогда отчёт построится сразу после расшифровки
+            if isLive {
+                Button { showTypePicker = true } label: {
+                    Label(rec.isUnclassified ? "Выбрать тип встречи" : "Тип: \(rec.meeting?.templateTitle ?? "")", systemImage: rec.isUnclassified ? "square.grid.2x2" : "checkmark.circle")
+                        .font(.subheadline)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(rec.isUnclassified ? .accentColor : .green)
+            } else if !rec.isUnclassified {
+                Text(rec.meeting?.templateTitle ?? "").font(.subheadline).foregroundStyle(.secondary)
+            }
         }
     }
 

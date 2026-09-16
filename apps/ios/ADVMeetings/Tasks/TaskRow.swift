@@ -14,7 +14,6 @@ struct TaskRow: View {
                     .foregroundStyle(task.isDone ? .green : .secondary)
             }
             .buttonStyle(.plain)
-            .disabled(!task.isOwner)
             .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 4) {

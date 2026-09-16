@@ -132,6 +132,8 @@ export async function notifyMeeting(job: NotifyJob): Promise<void> {
   if (job.kind === "report_ready") {
     const [r] = await d.select({ title: reports.title }).from(reports).where(eq(reports.meetingId, m.id)).limit(1);
     payload = { title: "Отчёт готов", body: r?.title ?? m.title, data: { meetingId: m.id, kind: "report_ready" }, threadId: m.id };
+  } else if (job.kind === "transcript_ready") {
+    payload = { title: "Расшифровка готова", body: `${m.title} — проверьте спикеров и выберите тип встречи, чтобы получить отчёт`, data: { meetingId: m.id, kind: "transcript_ready" }, threadId: m.id };
   } else {
     payload = { title: "Не удалось обработать запись", body: m.error ?? m.title, data: { meetingId: m.id, kind: "failed" }, threadId: m.id };
   }

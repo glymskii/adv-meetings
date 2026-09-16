@@ -13,7 +13,6 @@ struct TaskEditorView: View {
     @State private var assigneeName: String?
     @State private var hasDeadline: Bool
     @State private var deadline: Date
-    @State private var isDone: Bool
     @State private var busy = false
     @State private var error: String?
     @State private var confirmDelete = false
@@ -27,17 +26,29 @@ struct TaskEditorView: View {
         _assignee = State(initialValue: task.assigneePersonId.map { Person(id: $0, name: task.assigneeName ?? "", role: nil, company: nil, email: nil, agencyId: nil, source: "", isActive: true, openTasks: nil) })
         _hasDeadline = State(initialValue: task.deadline != nil)
         _deadline = State(initialValue: task.deadline ?? Calendar.current.date(byAdding: .day, value: 7, to: Date())!)
-        _isDone = State(initialValue: task.isDone)
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Задача") {
-                    TextField("Что нужно сделать", text: $text, axis: .vertical).lineLimit(2...6)
+                    TextField("Что нужно сделать", text: $text, axis: .vertical).lineLimit(2...6).disabled(!task.isOwner)
                     if let q = task.quote, !q.isEmpty {
                         Text("«\(q)»").font(.caption).italic().foregroundStyle(.secondary)
                     }
+                }
+                // Главное действие в карточке — отметить выполнение (доступно и тем, с кем встречей поделились)
+                Section {
+                    Button { Task { await setDone(!task.isDone) } } label: {
+                        HStack {
+                            if busy { ProgressView() } else { Image(systemName: task.isDone ? "arrow.uturn.backward.circle.fill" : "checkmark.circle.fill") }
+                            Text(task.isDone ? "Вернуть в работу" : "Отметить выполненной").font(.headline)
+                            Spacer()
+                        }
+                        .foregroundStyle(task.isDone ? Color.orange : Color.green)
+                    }
+                    .disabled(busy)
+                    if task.isDone, let d = task.doneAt { Text("Выполнено \(Fmt.dateTime.string(from: d))").font(.caption).foregroundStyle(.secondary) }
                 }
                 Section("Ответственный") {
                     NavigationLink {
@@ -66,9 +77,6 @@ struct TaskEditorView: View {
                     if task.deadlineIsDefault && hasDeadline { Text("Срок назначен автоматически по настройкам (задача без явного срока на встрече)\(task.deadlineText.map { ". На встрече: «\($0)»" } ?? "")") }
                     else if let t = task.deadlineText, !t.isEmpty { Text("Как прозвучало на встрече: «\(t)»") }
                 }
-                Section {
-                    Toggle("Выполнено", isOn: $isDone)
-                }
                 Section("Встреча") {
                     Button {
                         onOpenMeeting?(task.meetingId)
@@ -92,7 +100,9 @@ struct TaskEditorView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Отмена") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Сохранить") { Task { await save() } }.disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty || !task.isOwner)
+                    if task.isOwner {
+                        Button("Сохранить") { Task { await save() } }.disabled(busy || text.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
                 }
             }
             .confirmationDialog("Удалить задачу?", isPresented: $confirmDelete, titleVisibility: .visible) {
@@ -106,11 +116,20 @@ struct TaskEditorView: View {
             .buttonStyle(.bordered).controlSize(.small).font(.caption)
     }
 
+    /// Мгновенно меняет статус и закрывает карточку
+    private func setDone(_ done: Bool) async {
+        busy = true; defer { busy = false }
+        do {
+            let updated = try await APIClient.shared.updateTask(task.id, TaskPatch(status: done ? .done : .open))
+            await onSaved(updated)
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+
     private func save() async {
         busy = true; defer { busy = false }
         var patch = TaskPatch()
         if text != task.task { patch.task = text.trimmingCharacters(in: .whitespaces) }
-        if isDone != task.isDone { patch.status = isDone ? .done : .open }
         if assignee?.id != task.assigneePersonId || assigneeName != task.assigneeName {
             patch.assigneePersonId = .some(assignee?.id)
             patch.assigneeName = .some(assignee?.name ?? assigneeName)

@@ -57,6 +57,8 @@ const transcript = {
   speakers: { speaker_0: "Айгерим" },
   selfSpeakerId: "speaker_0",
   speakerRoles: { speaker_0: "ours" as const, speaker_1: "client" as const },
+  speakerSuggestions: null,
+  speakersConfirmedAt: null,
   audioDurationSec: "36",
   wordCount: stt.wordCount,
   costUsd: "0",

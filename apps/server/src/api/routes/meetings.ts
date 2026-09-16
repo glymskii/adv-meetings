@@ -7,6 +7,8 @@ import { audioObjects, meetingTemplates, meetings, reports, shares, transcripts,
 import { headObject, objectKey, presignPut } from "../../storage/s3.js";
 import { enqueueProcessMeeting } from "../../queue/boss.js";
 import { purgeAudio } from "../../pipeline/process-meeting.js";
+import { UNCLASSIFIED_TEMPLATE_CODE } from "../../db/seed.js";
+import { applySpeakerMerges } from "../../transcript/speakers.js";
 import { assembleSections, renderDocx, renderMarkdown, renderPdf } from "../../export/index.js";
 import { config } from "../../config.js";
 import { logger } from "../../logger.js";
@@ -48,6 +50,19 @@ async function templateById(id: string): Promise<Template> {
   const [t] = await db().select().from(meetingTemplates).where(eq(meetingTemplates.id, id)).limit(1);
   if (!t) throw new HTTPException(404, { message: "Шаблон не найден" });
   return t;
+}
+
+/** Системный шаблон «тип не выбран» — для быстрой записи */
+async function unclassifiedTemplate(): Promise<Template> {
+  const [t] = await db().select().from(meetingTemplates).where(and(eq(meetingTemplates.code, UNCLASSIFIED_TEMPLATE_CODE), eq(meetingTemplates.isActive, true))).limit(1);
+  if (!t) throw new HTTPException(500, { message: "Системный шаблон не засеян (pnpm db:seed)" });
+  return t;
+}
+
+const autoTitleRe = /^Запись /;
+function autoTitle(startedAt: Date, t: Template): string {
+  const when = startedAt.toLocaleString("ru-RU", { timeZone: "Asia/Almaty", dateStyle: "short", timeStyle: "short" });
+  return t.code === UNCLASSIFIED_TEMPLATE_CODE ? `Запись ${when}` : `Запись ${when} · ${t.title}`;
 }
 
 function summaryDto(m: Meeting, t: Template, flags: { hasTranscript: boolean; hasReport: boolean; isOwner: boolean }) {
@@ -155,9 +170,9 @@ meetingsRoutes.openapi(
   async (c) => {
     const u = c.get("user");
     const body = c.req.valid("json");
-    const t = await templateById(body.templateId);
+    const t = body.templateId ? await templateById(body.templateId) : await unclassifiedTemplate();
     const startedAt = body.startedAt ? new Date(body.startedAt) : new Date();
-    const title = body.title?.trim() || `Запись ${startedAt.toLocaleString("ru-RU", { timeZone: "Asia/Almaty", dateStyle: "short", timeStyle: "short" })} · ${t.title}`;
+    const title = body.title?.trim() || autoTitle(startedAt, t);
     const confidentiality = t.confidentiality === "restricted" ? "restricted" : t.allowConfidentialityChoice && body.confidentiality ? body.confidentiality : "standard";
     const [m] = await db()
       .insert(meetings)
@@ -220,6 +235,8 @@ async function detailDto(a: Access) {
             selfSpeakerId: tr.selfSpeakerId ?? null,
             speakerRoles: tr.speakerRoles ?? {},
             speakerIds: [...new Set(tr.segments.map((s) => s.speakerId))],
+            speakerSuggestions: tr.speakerSuggestions ?? null,
+            speakersConfirmed: !!tr.speakersConfirmedAt,
             audioDurationSec: tr.audioDurationSec ? Number(tr.audioDurationSec) : null,
             wordCount: tr.wordCount,
             createdAt: tr.createdAt.toISOString(),
@@ -258,8 +275,19 @@ meetingsRoutes.openapi(
     const a = await loadMeetingWithAccess(c.req.valid("param").id, c.get("user"));
     requireOwner(a);
     const body = c.req.valid("json");
-    const t = await templateById(a.meeting.templateId);
+    let t = await templateById(a.meeting.templateId);
     const patch: Partial<Meeting> = {};
+    if (body.templateId !== undefined && body.templateId !== a.meeting.templateId) {
+      // Смена типа: можно всегда, кроме момента, когда отчёт уже строится. Пайплайн берёт актуальный шаблон после расшифровки.
+      if (a.meeting.status === "summarizing") throw new HTTPException(409, { message: "Отчёт уже строится — дождитесь окончания, потом можно пересобрать по другому типу" });
+      t = await templateById(body.templateId);
+      if (t.code === UNCLASSIFIED_TEMPLATE_CODE) throw new HTTPException(400, { message: "Выберите тип встречи" });
+      patch.templateId = t.id;
+      patch.templateCode = t.code;
+      patch.templateVersion = t.version;
+      if (t.confidentiality === "restricted") patch.confidentiality = "restricted";
+      if (autoTitleRe.test(a.meeting.title) && body.title === undefined) patch.title = autoTitle(a.meeting.startedAt, t);
+    }
     if (body.title !== undefined) patch.title = body.title.trim() || a.meeting.title;
     if (body.contextFields !== undefined) patch.contextFields = body.contextFields;
     if (body.participantsHint !== undefined) patch.participantsHint = body.participantsHint;
@@ -459,17 +487,30 @@ meetingsRoutes.openapi(
   async (c) => {
     const a = await loadMeetingWithAccess(c.req.valid("param").id, c.get("user"));
     requireOwner(a);
-    const { speakers, selfSpeakerId, speakerRoles } = c.req.valid("json");
+    const { speakers, selfSpeakerId, speakerRoles, merges, confirmed } = c.req.valid("json");
+    const [tr] = await db().select().from(transcripts).where(eq(transcripts.meetingId, a.meeting.id)).limit(1);
+    if (!tr) throw new HTTPException(409, { message: "Транскрипта ещё нет" });
     const cleaned = Object.fromEntries(Object.entries(speakers).map(([k, v]) => [k, v.trim()]).filter(([, v]) => v));
-    const patch: { speakers: typeof cleaned; selfSpeakerId?: string | null; speakerRoles?: Record<string, "ours" | "client" | "vendor"> } = { speakers: cleaned };
+    const patch: Partial<typeof transcripts.$inferInsert> = { speakers: cleaned };
     if (speakerRoles !== undefined) patch.speakerRoles = speakerRoles;
-    if (selfSpeakerId !== undefined) {
-      patch.selfSpeakerId = selfSpeakerId;
+    let self = selfSpeakerId !== undefined ? selfSpeakerId : tr.selfSpeakerId;
+    if (merges && Object.keys(merges).length) {
+      // Дубли диаризации: реплики «лишнего» спикера переходят к основному, его имя/роль/отметка «это я» — тоже
+      const merged = applySpeakerMerges({ segments: tr.segments, speakers: cleaned, speakerRoles: patch.speakerRoles ?? tr.speakerRoles, selfSpeakerId: self }, merges);
+      patch.segments = merged.segments;
+      patch.speakers = merged.speakers;
+      patch.speakerRoles = merged.speakerRoles;
+      patch.fullText = merged.segments.map((s) => s.text).join(" ");
+      self = merged.selfSpeakerId;
+    }
+    if (selfSpeakerId !== undefined || merges) {
+      patch.selfSpeakerId = self;
       // Владелец записи: подставляем имя пользователя, если спикер ещё не назван; роль — коллега
       const me = c.get("user");
-      if (selfSpeakerId && !cleaned[selfSpeakerId] && me.name?.trim()) cleaned[selfSpeakerId] = me.name.trim();
-      if (selfSpeakerId) patch.speakerRoles = { ...(patch.speakerRoles ?? speakerRoles ?? {}), [selfSpeakerId]: "ours" };
+      if (self && !patch.speakers![self] && me.name?.trim()) patch.speakers = { ...patch.speakers, [self]: me.name.trim() };
+      if (self) patch.speakerRoles = { ...(patch.speakerRoles ?? speakerRoles ?? tr.speakerRoles ?? {}), [self]: "ours" };
     }
+    if (confirmed) patch.speakersConfirmedAt = new Date();
     await db().update(transcripts).set(patch).where(eq(transcripts.meetingId, a.meeting.id));
     return c.json(await detailDto(await loadMeetingWithAccess(a.meeting.id, c.get("user"))), 200);
   },
@@ -491,9 +532,11 @@ meetingsRoutes.openapi(
     const body = c.req.valid("json");
     const [tr] = await db().select({ id: transcripts.id }).from(transcripts).where(eq(transcripts.meetingId, a.meeting.id)).limit(1);
     if (!tr) throw new HTTPException(409, { message: "Транскрипта ещё нет" });
-    if (!["done", "failed"].includes(a.meeting.status)) throw new HTTPException(409, { message: "Встреча уже обрабатывается" });
-    if (body.templateId) await templateById(body.templateId);
-    const [m] = await db().update(meetings).set({ status: "queued", statusDetail: "Пересборка отчёта", error: null }).where(eq(meetings.id, a.meeting.id)).returning();
+    if (!["done", "failed", "transcribed"].includes(a.meeting.status)) throw new HTTPException(409, { message: "Встреча уже обрабатывается" });
+    const target = body.templateId ? await templateById(body.templateId) : await templateById(a.meeting.templateId);
+    if (target.code === UNCLASSIFIED_TEMPLATE_CODE) throw new HTTPException(409, { message: "Сначала выберите тип встречи" });
+    const first = a.meeting.status === "transcribed";
+    const [m] = await db().update(meetings).set({ status: "queued", statusDetail: first ? "Составление отчёта" : "Пересборка отчёта", error: null }).where(eq(meetings.id, a.meeting.id)).returning();
     await enqueueProcessMeeting({ meetingId: a.meeting.id, regenerate: true, templateId: body.templateId, effort: body.effort, model: body.draft ? config().ANTHROPIC_MODEL_DRAFT : undefined, instructions: body.instructions });
     const t = await templateById(m!.templateId);
     return c.json(summaryDto(m!, t, { hasTranscript: true, hasReport: true, isOwner: true }), 202);
